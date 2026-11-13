@@ -40,3 +40,20 @@ repository:
         type: SCA
         rulesets: [default]
         integration: {adhoc: false, ci: true, release: true}
+      - name: Ruff (bandit rules)
+        type: SAST
+        rulesets: [S]
+        integration: {adhoc: true, ci: true, release: true}
+      - name: CodeQL
+        type: SAST
+        rulesets: [security-and-quality]
+        integration: {adhoc: false, ci: true, release: false}
+      - name: zizmor
+        type: SAST
+        comment: GitHub Actions workflow security
+        rulesets: [default]
+        integration: {adhoc: false, ci: true, release: false}
+      - name: OpenSSF Scorecard
+        type: SCA
+        rulesets: [default]
+        integration: {adhoc: false, ci: true, release: false}

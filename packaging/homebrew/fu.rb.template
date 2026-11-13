@@ -1,0 +1,33 @@
+# Template for Formula/fu.rb in josh-quinn/homebrew-tap. RELEASING.md says how to fill it in.
+class Fu < Formula
+  include Language::Python::Virtualenv
+
+  desc "Follow-up board for parked work, with a Claude Code and Copilot CLI skill"
+  homepage "https://github.com/josh-quinn/fu"
+  url "https://github.com/josh-quinn/fu/releases/download/vVERSION/fu_board-VERSION.tar.gz"
+  sha256 "SHA256_OF_THE_SDIST"
+  license "MIT"
+
+  depends_on "python@3.13"
+
+  # Resource blocks for Textual and its dependencies go here.
+  # Generate them with: brew update-python-resources josh-quinn/tap/fu
+
+  def install
+    virtualenv_install_with_resources
+  end
+
+  def caveats
+    <<~EOS
+      To give Claude Code and Copilot CLI the follow-ups skill, run:
+        fu skill install
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/fu --version")
+    ENV["FU_DATA_DIR"] = testpath/"board"
+    system bin/"fu", "add", "smoke test"
+    assert_match "smoke test", shell_output("#{bin}/fu ls")
+  end
+end

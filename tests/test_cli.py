@@ -232,3 +232,11 @@ def test_show_prints_the_session_title(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
     run(monkeypatch, capsys, "add", "Debug the cache")
     assert "Fix the cache bug" in run(monkeypatch, capsys, "show", "1")
+
+
+def test_job_notes_can_be_set_and_cleared_from_the_cli(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "Cheatsheet", "--kind", "btw")
+    run(monkeypatch, capsys, "job", "edit", "Cheatsheet", "--notes", "add the p99 query")
+    assert json.loads(run(monkeypatch, capsys, "job", "ls", "--json"))[0]["notes"] == "add the p99 query"
+    run(monkeypatch, capsys, "job", "edit", "Cheatsheet", "--notes", "")
+    assert json.loads(run(monkeypatch, capsys, "job", "ls", "--json"))[0]["notes"] == ""

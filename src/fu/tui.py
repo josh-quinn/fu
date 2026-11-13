@@ -2,7 +2,9 @@
 
 import os
 from datetime import date
+from pathlib import Path
 
+from fu import artifacts, summary
 from fu.core import (
     AGENTS,
     DATE_COLUMNS,
@@ -100,6 +102,16 @@ HELP = """\
           "Select by…" and [b]enter[/] to filter a whole week, month or year.
   [b]c[/]  clear every filter (the first [b]esc[/] just steps off the headers)
 
+[b]The summary panel (Jobs)[/]
+  [b]→[/]      on a job row, step into the panel on the right;  [b]←[/] (or esc) goes back to the rows
+  [b]↑ ↓[/]    move between its entries: child jobs, sessions, Restart, Artifacts, Notes
+  [b]enter[/]  on a job: jump to that job (you stay in the panel)
+          on a session: Restart it, or Open session folder
+          on Restart: "Restart session?" for the most recent session
+          on Artifacts: a list of what the sessions left (runbooks, explainers, skills, repos);
+                        enter opens one in its app, [b]x[/] hides a wrong guess
+          on Notes: add or edit a note ([b]ctrl+s[/] saves)
+
 [b]Filtering (Board)[/]
   [b]f[/] or [b]/[/]  filter by text, job, status, agent, session, idle days, recently worked
   [b]c[/] or [b]esc[/]  clear all filters
@@ -132,7 +144,9 @@ def build_app():
         OptionList,
         Select,
         Static,
+        TextArea,
     )
+    from textual.widgets.option_list import Option
 
     BADGE = {"todo": ("○ todo", "yellow"), "doing": ("◐ doing", "cyan"), "done": ("● done", "green")}
 
@@ -581,6 +595,133 @@ def build_app():
             else:
                 self.dismiss(None)
 
+    class SummaryList(OptionList):
+        """The Jobs summary panel: Up/Down walk its entries, Enter acts on one, Left goes back to the rows."""
+
+        BINDINGS = [Binding("left,escape", "back", show=False)]
+
+        def action_back(self) -> None:
+            self.app.focus_rows()
+
+        def actionable(self) -> list[int]:
+            return [n for n in range(self.option_count) if not self.get_option_at_index(n).disabled]
+
+        # Stop at the first and last entry instead of wrapping round, like every other list here.
+        def action_cursor_down(self) -> None:
+            if self.highlighted is None or self.highlighted < max(self.actionable(), default=0):
+                super().action_cursor_down()
+
+        def action_cursor_up(self) -> None:
+            if self.highlighted is None or self.highlighted > min(self.actionable(), default=0):
+                super().action_cursor_up()
+
+    class ArtifactList(ModalScreen[None]):
+        """Everything the job's sessions left behind. Enter opens one in its app; x hides a wrong guess."""
+
+        BINDINGS = [
+            Binding("escape,left", "close", "Close"),
+            Binding("x", "hide", "Hide this one"),
+        ]
+
+        def __init__(self, arts: list[dict]) -> None:
+            super().__init__()
+            self.arts = arts
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="dialog wide"):
+                yield Label("[b]Artifacts[/] [dim]enter opens · x hides a wrong guess · esc closes[/]")
+                yield OptionList(id="arts")
+
+        def on_mount(self) -> None:
+            self.fill()
+            self.query_one(OptionList).focus()
+
+        def fill(self) -> None:
+            opts = self.query_one(OptionList)
+            opts.clear_options()
+            home = str(Path.home())
+            opts.add_options(
+                [
+                    Option(
+                        Text.from_markup(
+                            f"{a['kind']:<6} [b]{escape(a['label'])}[/]  [dim]{escape(a['path'].replace(home, '~'))}[/]"
+                        ),
+                        id=str(n),
+                    )
+                    for n, a in enumerate(self.arts)
+                ]
+            )
+            opts.highlighted = 0 if self.arts else None
+
+        def on_option_list_option_selected(self, event) -> None:
+            event.stop()
+            art = self.arts[int(event.option.id)]
+            if not artifacts.open_path(art["path"]):
+                self.notify(f"Could not open {art['path']}", severity="error")
+
+        def action_hide(self) -> None:
+            opts = self.query_one(OptionList)
+            if opts.highlighted is None:
+                return
+            art = self.arts.pop(opts.highlighted)
+            self.app.dismiss_artifact(art)
+            self.fill()
+            if not self.arts:
+                self.dismiss(None)
+
+        def action_close(self) -> None:
+            self.dismiss(None)
+
+    class SessionActions(ModalScreen["str | None"]):
+        BINDINGS = [Binding("escape,left", "close", "Close")]
+
+        def __init__(self, label: str) -> None:
+            super().__init__()
+            self.label = label
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="dialog"):
+                yield Label(f"[b]{escape(self.label)}[/]")
+                yield OptionList(
+                    Option("Restart", id="restart"), Option("Open session folder", id="folder"), id="actions"
+                )
+                yield Label("[dim]enter chooses · esc or ← closes[/]", classes="field")
+
+        def on_mount(self) -> None:
+            opts = self.query_one(OptionList)
+            opts.highlighted = 0
+            opts.focus()
+
+        def on_option_list_option_selected(self, event) -> None:
+            event.stop()
+            self.dismiss(event.option.id)
+
+        def action_close(self) -> None:
+            self.dismiss(None)
+
+    class NotesForm(ModalScreen["str | None"]):
+        BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
+
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="dialog wide"):
+                yield Label("[b]Notes[/] [dim]ctrl+s saves · esc cancels[/]")
+                yield TextArea(self.text, id="notes-text")
+
+        def on_mount(self) -> None:
+            area = self.query_one(TextArea)
+            area.focus()
+            area.move_cursor(area.document.end)
+
+        def action_save(self) -> None:
+            self.dismiss(self.query_one(TextArea).text.strip())
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
     class HeaderTable(DataTable):
         """Up from the first row steps onto the column headers; there the arrows pick a
         header, Enter acts on it (sort on the Board, filter on Jobs) and Down returns to the rows."""
@@ -606,6 +747,8 @@ def build_app():
         def action_cursor_right(self) -> None:
             if self.app.header is not None:
                 self.app.header_move(1)
+            elif self.app.view == "jobs":
+                self.app.focus_panel()
 
         def action_select_cursor(self) -> None:
             if self.app.header is not None:
@@ -654,6 +797,9 @@ def build_app():
         .popup { width: 60; height: auto; max-height: 22; padding: 0 1; background: $surface; border: round $primary; }
         .popup Input { height: 1; border: none; padding: 0 1; background: $boost; }
         .popup OptionList { height: auto; border: none; padding: 0; background: $surface; }
+        #notes-text { height: 10; }
+        #jobs-detail { background: $background; border: none; border-left: solid $primary 40%; padding: 1 1; }
+        #jobs-detail > .option-list--option-disabled { color: $text; }
         .row { height: 1; padding: 0 1; background: $boost; }
         .row:focus { background: $primary 35%; text-style: bold; }
         .row.ro { background: transparent; color: $text-disabled; }
@@ -668,6 +814,8 @@ def build_app():
             self.show_done = False
             self.filters: dict = {}
             self.jfilters: dict = {}  # Jobs board: column -> filter
+            self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
+            self.shown_job: int | None = None  # whose summary the panel currently shows
             self.pick: str | None = None
 
         # ---- layout
@@ -681,7 +829,7 @@ def build_app():
                     yield Static(id="board-detail", classes="detail")
                 with Horizontal(id="jobs"):
                     yield HeaderTable(id="jobs-table", cursor_type="row", zebra_stripes=False)
-                    yield Static(id="jobs-detail", classes="detail")
+                    yield SummaryList(id="jobs-detail", classes="detail")
             yield Footer()
 
         def on_mount(self) -> None:
@@ -760,6 +908,11 @@ def build_app():
                 + (
                     f"   [b]filter:[/] {self.job_filter_chips()}  [dim](c clears)[/]"
                     if self.jfilters and self.view == "jobs"
+                    else ""
+                )
+                + (
+                    "   [b]panel:[/] [dim]↑ ↓ move · enter opens · ← back to the rows[/]"
+                    if self.in_panel and self.view == "jobs"
                     else ""
                 )
                 + (
@@ -876,31 +1029,129 @@ def build_app():
                 table.move_cursor(row=ids.index(keep))
             self.show_jobs_detail()
 
-        def show_jobs_detail(self) -> None:
-            job, panel = self.current_job(), self.query_one("#jobs-detail", Static)
-            if not job:
-                panel.update(
-                    "[dim]No jobs yet. Press [b]a[/] to add one.[/]"
-                    if not self.db["jobs"]
-                    else "[dim]No job matches the filters. [b]c[/] clears them.[/]"
-                )
+        STYLES = {"title": "bold", "meta": "dim", "head": "dim bold", "text": "", "action": ""}
+
+        def show_jobs_detail(self, force: bool = True) -> None:
+            """Rebuild the panel for the job under the cursor. A row-highlight event passes force=False so
+            it does not wipe the panel's own cursor when the job has not changed."""
+            panel = self.query_one("#jobs-detail", SummaryList)
+            job = self.current_job()
+            shown = job["id"] if job else None
+            if not force and shown == self.shown_job and panel.option_count:
                 return
-            row = next(r for r in job_rows(self.db) if r["job"] is job or r["job"]["id"] == job["id"])
-            item = job_resume_item(self.db, job)
-            cmd = resume_cmd(item) if item else None
-            panel.update(
-                f"[b]{KIND_GLYPH[job['kind']]} {escape(job['name'])}[/]\n"
-                f"[dim]{row['id']} · {job['kind']}"
-                + (f" · under {escape(row['parent'])}" if row["parent"] else "")
-                + "[/]\n\n"
-                f"[dim]Why[/]\n{escape(job['description']) or '[dim]No description. Press e to add one.[/]'}\n\n"
-                f"[dim]Restart[/]\n{escape(cmd) if cmd else '[dim]no session id captured[/]'}"
+            self.shown_job = shown
+            panel.clear_options()
+            if not job:
+                msg = (
+                    "No jobs yet. Press a to add one."
+                    if not self.db["jobs"]
+                    else "No job matches the filters. c clears them."
+                )
+                panel.add_options([Option(Text(msg, style="dim"), disabled=True)])
+                return
+            options = []
+            for e in summary.build(self.db, job):
+                text = Text(("\n" if e["style"] == "head" else "") + e["text"], style=self.STYLES[e["style"]])
+                if e["key"] and e["key"] not in ("notes",) and e["style"] == "action":
+                    text.stylize("not dim")
+                options.append(Option(text, id=e["key"], disabled=not e["enabled"]))
+            panel.add_options(options)
+
+        def first_enabled(self) -> int | None:
+            panel = self.query_one("#jobs-detail", SummaryList)
+            return next((n for n in range(panel.option_count) if not panel.get_option_at_index(n).disabled), None)
+
+        def focus_panel(self, key: str | None = None) -> None:
+            """Put the cursor in the panel, on the entry with this key (else the first actionable one)."""
+            panel = self.query_one("#jobs-detail", SummaryList)
+            if self.current_job() is None:
+                return
+            at = next((n for n in range(panel.option_count) if key and panel.get_option_at_index(n).id == key), None)
+            panel.highlighted = at if at is not None else self.first_enabled()
+            panel.focus()
+            self.in_panel = True
+            self.update_chrome()
+
+        def focus_rows(self) -> None:
+            self.query_one("#jobs-table", DataTable).focus()
+            self.in_panel = False
+            self.update_chrome()
+
+        def select_job(self, job_id: int) -> None:
+            """Jump to a job's row (clearing filters that hide it) and stay in the panel."""
+            if not any(r["job"]["id"] == job_id for r in filter_jobs(job_rows(self.db), self.jfilters)):
+                self.jfilters = {}
+                self.refresh_jobs()
+            rows = filter_jobs(job_rows(self.db), self.jfilters)
+            self.query_one("#jobs-table", DataTable).move_cursor(row=[r["job"]["id"] for r in rows].index(job_id))
+            self.show_jobs_detail()
+            self.update_chrome()
+            self.call_after_refresh(self.focus_panel)
+
+        def dismiss_artifact(self, art: dict) -> None:
+            """Hide a wrongly detected artifact on every task that carries it."""
+            db = load_db()
+            job = next((j for j in db["jobs"] if j["id"] == (self.current_job() or {}).get("id")), None)
+            for item in db["items"]:
+                if job and item.get("job_id") == job["id"]:
+                    artifacts.dismiss(item, art["path"])
+            save_db(db)
+            self.db = db
+            self.show_jobs_detail()
+
+        def on_option_list_option_selected(self, event) -> None:
+            if event.option_list.id != "jobs-detail":
+                return
+            job, key = self.current_job(), event.option.id or ""
+            if not job:
+                return
+            if key == "restart":
+                self.restart_job(job)
+            elif key == "notes":
+                self.edit_notes(job)
+            elif key == "artifacts":
+                self.push_screen(ArtifactList(summary.job_artifacts(self.db, job)))
+            elif key.startswith("job:"):
+                self.select_job(int(key.split(":", 1)[1]))
+            elif key.startswith("session:"):
+                self.session_actions(job, key.split(":", 1)[1])
+
+        def edit_notes(self, job: dict) -> None:
+            def done(text: str | None) -> None:
+                if text is not None:
+                    db = load_db()
+                    next(j for j in db["jobs"] if j["id"] == job["id"])["notes"] = text
+                    save_db(db)
+                    self.db = db
+                    self.show_jobs_detail()
+                    self.call_after_refresh(self.focus_panel, "notes")
+
+            self.push_screen(NotesForm(job.get("notes", "")), done)
+
+        def session_actions(self, job: dict, key: str) -> None:
+            item = summary.session_target(self.db, job, key)
+            if not item:
+                return
+
+            def done(choice: str | None) -> None:
+                if choice == "restart":
+                    self.pick = str(item["id"])
+                    self.exit()
+                elif choice == "folder":
+                    cwd = item.get("cwd")
+                    if not cwd or not Path(cwd).is_dir():
+                        self.notify("This session's folder no longer exists", severity="warning")
+                    else:
+                        artifacts.open_path(cwd)
+
+            self.push_screen(
+                SessionActions(summary.session_line(item["agent"], item["session_id"], item.get("cwd"))), done
             )
 
         # ---- events
         def on_data_table_row_highlighted(self, event) -> None:
             if event.data_table.id == "jobs-table":
-                self.show_jobs_detail()
+                self.show_jobs_detail(force=False)
             else:
                 self.show_board_detail()
 
@@ -936,6 +1187,7 @@ def build_app():
         def action_view(self, name: str) -> None:
             self.view = name
             self.header = None
+            self.in_panel = False
             self.query_one(ContentSwitcher).current = name
             self.query_one("#table" if name == "board" else "#jobs-table", DataTable).focus()
             self.update_chrome()

@@ -586,3 +586,266 @@ def test_filter_dialog_applies_a_text_filter(seeded):
         assert app.query_one(DataTable).row_count == 1
 
     drive(steps)
+
+
+# ----------------------------------------------------------------- summary panel
+
+
+def panel(app):
+    return app.query_one("#jobs-detail")
+
+
+def entry_key(app) -> str | None:
+    p = panel(app)
+    return None if p.highlighted is None else p.get_option_at_index(p.highlighted).id
+
+
+def panel_keys(app) -> list[str]:
+    p = panel(app)
+    return [o.id for o in (p.get_option_at_index(n) for n in range(p.option_count)) if o.id and not o.disabled]
+
+
+async def goto_entry(app, pilot, prefix: str) -> None:
+    """Walk down the panel until the highlighted entry's key starts with `prefix`."""
+    for _ in range(30):
+        if (entry_key(app) or "").startswith(prefix):
+            return
+        await pilot.press("down")
+    raise AssertionError(f"no entry {prefix!r} in {panel_keys(app)}")
+
+
+@pytest.fixture
+def epic_board(isolated, monkeypatch):
+    """An epic with a child story, two sessions (real folders), and one saved artifact."""
+    from fu import artifacts
+
+    monkeypatch.setattr(artifacts, "SCRATCH", ("/scratchpad/", "/node_modules/", "/.git/"))
+    work, docs = isolated / "work", isolated / "docs"
+    work.mkdir()
+    docs.mkdir()
+    runbook = docs / "runbook.md"
+    runbook.write_text("# how to")
+    db = core.load_db()
+    core.create_job(db, "Backprop", "epic", ext_id="ML-1")
+    core.create_job(db, "Gradient check", "story", ext_id="ML-2", parent="ML-1")
+    core.new_item(
+        db, "grads", job="ML-1", agent="claude", session_id="aaaa1111-x", cwd=str(work), last_worked="2026-11-10"
+    )
+    later = core.new_item(
+        db, "softmax", job="ML-1", agent="copilot", session_id="bbbb2222-y", cwd=str(docs), last_worked="2026-11-12"
+    )
+    artifacts.add_manual(later, str(runbook), "Prod runbook")
+    core.save_db(db)
+    return {"work": work, "docs": docs, "runbook": runbook}
+
+
+async def open_panel(app, pilot, title="Backprop") -> None:
+    await pilot.press("1")
+    await select_job(app, pilot, title)
+    await pilot.press("right")
+    await pilot.pause()
+
+
+def test_right_enters_the_panel_on_its_first_actionable_entry_and_left_leaves(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        assert app.focused is panel(app) and app.in_panel
+        assert entry_key(app) == panel_keys(app)[0]
+        await pilot.press("left")
+        assert app.focused is jobs_table(app) and not app.in_panel
+
+    drive(steps)
+
+
+def test_up_and_down_land_only_on_actionable_entries(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        seen = [entry_key(app)]
+        for _ in range(len(panel_keys(app)) + 2):
+            await pilot.press("down")
+            seen.append(entry_key(app))
+        assert set(seen) <= set(panel_keys(app))  # never on a heading or plain text
+        assert seen[-1] == panel_keys(app)[-1] == "notes"  # it stops at the end
+
+    drive(steps)
+
+
+def test_the_panel_cursor_stops_at_the_first_entry_too(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        first = entry_key(app)
+        await pilot.press("up", "up", "up")
+        assert entry_key(app) == first  # no wrapping round to the last entry
+
+    drive(steps)
+
+
+def test_enter_on_a_child_job_jumps_to_its_row_and_keeps_the_cursor_in_the_panel(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "job:")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.current_job()["name"] == "Gradient check"
+        assert app.focused is panel(app)
+        assert "Gradient check" in str(panel(app).get_option_at_index(0).prompt)
+        # the cursor starts inside the new job's panel, not nowhere and not on a stale row
+        assert entry_key(app) == panel_keys(app)[0]
+
+    drive(steps)
+
+
+def test_jumping_to_a_job_hidden_by_a_filter_clears_the_filters(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        app.jfilters = {"title": {"text": "backprop"}}
+        app.reload()
+        await goto_entry(app, pilot, "job:")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.jfilters == {} and app.current_job()["name"] == "Gradient check"
+
+    drive(steps)
+
+
+def test_enter_on_a_session_offers_restart_or_open_folder_and_left_goes_back(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "session:")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "SessionActions"
+        options = app.screen.query_one("#actions")
+        assert [str(options.get_option_at_index(n).prompt) for n in range(2)] == ["Restart", "Open session folder"]
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ != "SessionActions" and app.focused is panel(app)
+
+    drive(steps)
+
+
+def test_restart_from_a_session_resumes_that_sessions_latest_task(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "session:claude")
+        await pilot.press("enter", "enter")  # Restart is the first choice
+        await pilot.pause()
+        grads = next(i for i in core.load_db()["items"] if i["summary"] == "grads")
+        assert app.pick == str(grads["id"])
+
+    drive(steps)
+
+
+def test_open_session_folder_opens_that_sessions_working_folder(epic_board, monkeypatch):
+    from fu import artifacts
+
+    opened = []
+    monkeypatch.setattr(artifacts, "open_path", lambda path: opened.append(path) or True)
+
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "session:claude")
+        await pilot.press("enter", "down", "enter")
+        await pilot.pause()
+        assert opened == [str(epic_board["work"])]
+
+    drive(steps)
+
+
+def test_a_sessions_missing_folder_is_reported_not_opened(epic_board, monkeypatch):
+    from fu import artifacts
+
+    opened = []
+    monkeypatch.setattr(artifacts, "open_path", lambda path: opened.append(path) or True)
+    epic_board["work"].rmdir()
+
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "session:claude")
+        await pilot.press("enter", "down", "enter")
+        await pilot.pause()
+        assert opened == [] and app.is_running
+
+    drive(steps)
+
+
+def test_enter_on_restart_asks_before_resuming_like_the_row_does(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "restart")
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ == "Confirm"
+        await pilot.press("y")
+        softmax = next(i for i in core.load_db()["items"] if i["summary"] == "softmax")
+        assert app.pick == str(softmax["id"])
+
+    drive(steps)
+
+
+def test_enter_on_artifacts_lists_them_and_enter_opens_one_in_its_app(epic_board, monkeypatch):
+    from fu import artifacts
+
+    opened = []
+    monkeypatch.setattr(artifacts, "open_path", lambda path: opened.append(path) or True)
+
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "artifacts")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "ArtifactList"
+        assert [a["label"] for a in app.screen.arts] == ["Prod runbook"]
+        await pilot.press("enter")
+        assert opened == [str(epic_board["runbook"])]
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ != "ArtifactList"
+
+    drive(steps)
+
+
+def test_x_hides_a_wrongly_listed_artifact_for_good(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "artifacts")
+        await pilot.press("enter", "x")
+        await pilot.pause()
+        from fu import artifacts, summary
+
+        db = core.load_db()
+        job = core.job_by_ref(db, "ML-1")
+        assert summary.job_artifacts(db, job) == []
+        assert (
+            str(epic_board["runbook"])
+            in next(i for i in db["items"] if i["summary"] == "softmax")["artifacts_dismissed"]
+        )
+        assert "artifacts" not in panel_keys(app)  # nothing left to open
+        assert artifacts  # (module imported for clarity)
+
+    drive(steps)
+
+
+def test_notes_are_added_with_ctrl_s_and_esc_discards(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "notes")
+        await pilot.press("enter", *"ask about relu", "escape")
+        assert core.job_by_ref(core.load_db(), "ML-1")["notes"] == ""
+        await pilot.press("enter", *"ask about relu", "ctrl+s")
+        await pilot.pause()
+        assert core.job_by_ref(core.load_db(), "ML-1")["notes"] == "ask about relu"
+        assert app.focused is panel(app)
+        await pilot.press("enter")
+        assert app.screen.query_one("#notes-text").text == "ask about relu"  # editing, not starting over
+
+    drive(steps)
+
+
+def test_the_bar_hints_at_the_panel_keys_while_you_are_in_it(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        assert "panel:" in str(app.query_one("#bar").render())
+        await pilot.press("left")
+        assert "panel:" not in str(app.query_one("#bar").render())
+
+    drive(steps)

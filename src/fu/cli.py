@@ -298,7 +298,7 @@ def cmd_job_ls(a) -> None:
 def cmd_job_edit(a) -> None:
     db = load_db()
     job = job_by_ref(db, a.ref) or sys.exit(f"fu: no job matching '{a.ref}'")
-    for field, value in (("name", a.name), ("kind", a.kind), ("description", a.desc)):
+    for field, value in (("name", a.name), ("kind", a.kind), ("description", a.desc), ("notes", a.notes)):
         if value is not None:
             job[field] = value
     if a.id is not None:
@@ -478,6 +478,7 @@ def main() -> None:
     sp.add_argument("--id", help="your own id (pass '' to clear it)")
     sp.add_argument("--parent", help="parent job, or 'none'")
     sp.add_argument("--desc")
+    sp.add_argument("--notes", help="free-text notes on the job (the Jobs screen's Notes entry)")
     sp = parser("rm", cmd_job_rm, "delete a job (its tasks are kept, unassigned)", aliases=["delete"], parent=jsub)
     sp.add_argument("ref")
     sp.add_argument("-y", "--yes", action="store_true")

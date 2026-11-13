@@ -10,28 +10,33 @@ from pathlib import Path
 from fu.core import (
     AGENTS,
     CONFIG_FILE,
+    DEFAULT_KIND,
     KIND_GLYPH,
     KINDS,
     STATUSES,
     UNSET,
     age,
     by_session,
+    check_ext_id,
     clip,
+    create_job,
     data_dir,
     detect_agent,
     detect_session,
-    ensure_job,
     find,
     job_by_ref,
+    job_label,
     job_name,
     jobs_ordered,
     load_db,
     matches,
     new_item,
     public,
+    remove_job,
     resume_cmd,
     save_db,
     session_label,
+    set_parent,
     skey,
     sort_items,
     today,
@@ -221,10 +226,9 @@ def cmd_job_add(a) -> None:
     name = " ".join(a.name)
     if job_by_ref(db, name, fuzzy=False):
         sys.exit(f"fu: job '{name}' already exists")
-    job = ensure_job(db, name, a.kind)
-    job["description"] = a.desc or ""
+    job = create_job(db, name, a.kind, ext_id=a.id or "", parent=a.parent, desc=a.desc or "")
     save_db(db)
-    print(f"added job J{job['id']}: {job['name']} ({job['kind']})")
+    print(f"added job {job_label(job)}: {job['name']} ({job['kind']})" + (f" under {a.parent}" if a.parent else ""))
 
 
 def cmd_job_ls(a) -> None:
@@ -236,10 +240,13 @@ def cmd_job_ls(a) -> None:
     if not rows:
         print("no jobs yet: `fu job add NAME --kind epic`")
         return
-    print(f"{'ID':>4}  {'KIND':<6}  {'OPEN':>4}  {'DONE':>4}  {'SESS':>4}  {'LAST WORKED':<11}  NAME")
+    print(f"{'ID':<10}  {'KIND':<6}  {'PARENT':<10}  {'OPEN':>4}  {'DONE':>4}  {'SESS':>4}  {'LAST WORKED':<11}  NAME")
+    by_id = {j["id"]: j for j in db["jobs"]}
     for r in rows:
+        parent = job_label(by_id[r["parent_id"]]) if r["parent_id"] in by_id else "-"
         print(
-            f"{'J' + str(r['id']):>4}  {r['kind']:<6}  {r['open']:>4}  {r['done']:>4}  {r['sessions']:>4}  {r['last_worked']:<11}  {r['name']}"
+            f"{job_label(r):<10}  {r['kind']:<6}  {parent:<10}  {r['open']:>4}  {r['done']:>4}  {r['sessions']:>4}  "
+            f"{r['last_worked']:<11}  {r['name']}"
         )
 
 
@@ -249,8 +256,13 @@ def cmd_job_edit(a) -> None:
     for field, value in (("name", a.name), ("kind", a.kind), ("description", a.desc)):
         if value is not None:
             job[field] = value
+    if a.id is not None:
+        check_ext_id(db, a.id.strip(), job)
+        job["ext_id"] = a.id.strip()
+    if a.parent is not None:
+        set_parent(db, job, a.parent)
     save_db(db)
-    print(f"updated J{job['id']}")
+    print(f"updated {job_label(job)}")
 
 
 def cmd_job_rm(a) -> None:
@@ -262,12 +274,9 @@ def cmd_job_rm(a) -> None:
         and input(f"delete job '{job['name']}'? its {n} item(s) are kept, just unassigned [y/N] ").lower() != "y"
     ):
         return
-    for i in db["items"]:
-        if i.get("job_id") == job["id"]:
-            i["job_id"] = None
-    db["jobs"] = [j for j in db["jobs"] if j is not job]
+    remove_job(db, job)
     save_db(db)
-    print(f"deleted job J{job['id']}; {n} item(s) unassigned")
+    print(f"deleted job {job_label(job)}; {n} item(s) unassigned")
 
 
 def cmd_sessions(a) -> None:
@@ -340,7 +349,7 @@ def main() -> None:
     sp.add_argument("summary", nargs="+", help="one-line topic")
     sp.add_argument("--why", help="why you started it / where you left off")
     sp.add_argument("--job", help="job name or id to file it under (a new name creates the job)")
-    sp.add_argument("--kind", choices=KINDS, help="kind for a newly created job (default misc)")
+    sp.add_argument("--kind", choices=KINDS, help="kind for a newly created job (default story)")
     sp.add_argument("--agent", choices=AGENTS, help="default: detected from the environment")
     sp.add_argument("--session-id", help="default: detected for the chosen agent")
     sp.add_argument("--cwd", help="default: current folder")
@@ -394,7 +403,9 @@ def main() -> None:
     jsub = jp.add_subparsers(dest="jcmd", required=True)
     sp = parser("add", cmd_job_add, "create a job", parent=jsub)
     sp.add_argument("name", nargs="+")
-    sp.add_argument("--kind", choices=KINDS, default="misc")
+    sp.add_argument("--kind", choices=KINDS, default=DEFAULT_KIND)
+    sp.add_argument("--id", help="your own id for it, e.g. a Jira key (optional; ideas and btws rarely have one)")
+    sp.add_argument("--parent", help="job this one belongs to, e.g. the epic of a story")
     sp.add_argument("--desc")
     sp = parser("ls", cmd_job_ls, "list jobs with counts", aliases=["list"], parent=jsub)
     sp.add_argument("--json", action="store_true")
@@ -402,6 +413,8 @@ def main() -> None:
     sp.add_argument("ref", help="job name or id")
     sp.add_argument("--name")
     sp.add_argument("--kind", choices=KINDS)
+    sp.add_argument("--id", help="your own id (pass '' to clear it)")
+    sp.add_argument("--parent", help="parent job, or 'none'")
     sp.add_argument("--desc")
     sp = parser("rm", cmd_job_rm, "delete a job (its tasks are kept, unassigned)", aliases=["delete"], parent=jsub)
     sp.add_argument("ref")

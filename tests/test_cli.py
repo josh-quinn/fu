@@ -47,6 +47,50 @@ def test_ls_filters_combine(monkeypatch, capsys, seeded):
     assert out[0]["job"] == "Backprop from scratch"
 
 
+def test_a_new_job_defaults_to_a_story(monkeypatch, capsys):
+    run(monkeypatch, capsys, "add", "one", "--job", "Something")
+    assert json.loads(run(monkeypatch, capsys, "job", "ls", "--json"))[0]["kind"] == "story"
+
+
+def test_old_kinds_are_no_longer_accepted(monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        run(monkeypatch, capsys, "job", "add", "x", "--kind", "misc")
+
+
+def test_job_with_external_id_and_parent(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "Backprop", "--kind", "epic", "--id", "ML-1")
+    out = run(monkeypatch, capsys, "job", "add", "Gradient check", "--id", "ML-2", "--parent", "ML-1")
+    assert "added job ML-2" in out
+    rows = {r["ext_id"]: r for r in json.loads(run(monkeypatch, capsys, "job", "ls", "--json"))}
+    assert rows["ML-2"]["parent_id"] == rows["ML-1"]["id"]
+    listing = run(monkeypatch, capsys, "job", "ls")
+    assert "ML-2" in listing and "PARENT" in listing
+
+
+def test_a_task_can_be_filed_under_a_job_by_external_id(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "Cache bug", "--kind", "bug", "--id", "OPS-9")
+    run(monkeypatch, capsys, "add", "Reproduce", "--job", "OPS-9")
+    assert json.loads(run(monkeypatch, capsys, "ls", "--job", "OPS-9", "--json"))[0]["job"] == "Cache bug"
+
+
+def test_job_edit_sets_and_clears_id_and_parent(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "Backprop", "--kind", "epic")
+    run(monkeypatch, capsys, "job", "add", "Gradient check")
+    run(monkeypatch, capsys, "job", "edit", "Gradient", "--id", "ML-2", "--parent", "Backprop")
+    row = next(r for r in json.loads(run(monkeypatch, capsys, "job", "ls", "--json")) if r["ext_id"] == "ML-2")
+    assert row["parent_id"] == 1
+    run(monkeypatch, capsys, "job", "edit", "ML-2", "--id", "", "--parent", "none")
+    row = next(r for r in json.loads(run(monkeypatch, capsys, "job", "ls", "--json")) if r["name"] == "Gradient check")
+    assert row["ext_id"] == "" and row["parent_id"] is None
+
+
+def test_a_job_cannot_become_its_own_ancestor(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "Backprop", "--kind", "epic")
+    run(monkeypatch, capsys, "job", "add", "Gradient check", "--parent", "Backprop")
+    with pytest.raises(SystemExit, match="loop"):
+        run(monkeypatch, capsys, "job", "edit", "Backprop", "--parent", "Gradient check")
+
+
 def test_edit_job_none_unassigns(monkeypatch, capsys, seeded):
     run(monkeypatch, capsys, "edit", "1", "--job", "none")
     assert json.loads(run(monkeypatch, capsys, "show", "1", "--json"))["job"] is None

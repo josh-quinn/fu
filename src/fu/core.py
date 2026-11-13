@@ -134,7 +134,7 @@ def job_by_ref(db: dict, ref, fuzzy: bool = True) -> dict | None:
     return None
 
 
-def _check_ext_id(db: dict, ext_id: str, own: dict | None = None) -> None:
+def check_ext_id(db: dict, ext_id: str, own: dict | None = None) -> None:
     clash = next((j for j in db["jobs"] if j is not own and ext_id and j["ext_id"].lower() == ext_id.lower()), None)
     if clash:
         sys.exit(f"fu: id {ext_id} is already used by job '{clash['name']}'")
@@ -178,7 +178,7 @@ def remove_job(db: dict, job: dict) -> int:
 
 def create_job(db: dict, name: str, kind: str | None = None, ext_id: str = "", parent=None, desc: str = "") -> dict:
     ext_id = ext_id.strip()
-    _check_ext_id(db, ext_id)
+    check_ext_id(db, ext_id)
     job = {
         "id": next_id(db["jobs"]),
         "name": name.strip(),

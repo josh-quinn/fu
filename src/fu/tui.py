@@ -4,6 +4,7 @@ import os
 
 from fu.core import (
     AGENTS,
+    DEFAULT_KIND,
     KIND_GLYPH,
     KINDS,
     STATUSES,
@@ -50,7 +51,7 @@ HELP = """\
   [b]t[/]  set last worked to today
   [b]y[/]  copy the restart command
   [b]x[/]  delete the task (or job: its tasks are kept, unassigned)
-  [b]k[/]  Jobs: cycle the selected job's kind (epic > story > task > bug > spike > idea > misc)
+  [b]k[/]  Jobs: cycle the selected job's kind (epic > story > bug > spike > idea > btw > guide)
 
 [b]Filtering (Board)[/]
   [b]f[/] or [b]/[/]  filter by text, job, status, agent, session, idle days, recently worked
@@ -648,7 +649,7 @@ def build_app():
                         save_db(db)
                         self.reload()
 
-                self.push_screen(JobForm("New job", {"kind": "task"}), job_done)
+                self.push_screen(JobForm("New job", {"kind": DEFAULT_KIND}), job_done)
                 return
 
             def done(v: dict | None) -> None:

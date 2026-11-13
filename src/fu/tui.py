@@ -10,11 +10,13 @@ from fu.core import (
     STATUSES,
     age,
     by_session,
+    check_ext_id,
     clip,
-    ensure_job,
+    create_job,
     heat,
     idle_days,
     job_by_ref,
+    job_label,
     job_name,
     jobs_ordered,
     load_db,
@@ -23,6 +25,7 @@ from fu.core import (
     resume_cmd,
     save_db,
     session_label,
+    set_parent,
     skey,
     sort_items,
     today,
@@ -82,6 +85,7 @@ def build_app():
         Header,
         Input,
         Label,
+        Select,
         Static,
         Tree,
     )
@@ -158,32 +162,152 @@ def build_app():
         def action_cancel(self) -> None:
             self.dismiss(None)
 
-    class ItemForm(Form):
+    class FieldRow(Static, can_focus=True):
+        """One form value shown as a row; Enter turns it into an editor."""
+
+    class RowForm(ModalScreen["dict | None"]):
+        """Rows you move through with the arrows. Enter edits a row, Enter again leaves it.
+
+        FIELDS are (key, label, mode); mode is "text", "readonly" (greyed, skipped by the
+        arrows) or a tuple of options (a dropdown).
+        """
+
+        BINDINGS = [
+            Binding("escape", "back", "Back"),
+            Binding("ctrl+s", "save", "Save"),
+            Binding("up,shift+tab", "move(-1)", show=False),
+            Binding("down,tab", "move(1)", show=False),
+            Binding("enter", "edit_row", show=False),
+        ]
+        FIELDS: list[tuple[str, str, object]] = []
+
+        def __init__(self, heading: str, values: dict | None = None) -> None:
+            super().__init__()
+            self.heading = heading
+            self.vals = {k: str((values or {}).get(k) or "") for k, _, _ in self.FIELDS}
+            self.editing: str | None = None
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="dialog"):
+                yield Label(f"[b]{self.heading}[/]")
+                for key, label, mode in self.FIELDS:
+                    yield Label(
+                        label + (" [dim](set by the session)[/]" if mode == "readonly" else ""), classes="field"
+                    )
+                    yield FieldRow(self.shown(key), id=f"row-{key}", classes="row ro" if mode == "readonly" else "row")
+                    if isinstance(mode, tuple):
+                        yield Select(
+                            [(o, o) for o in mode],
+                            value=self.vals[key] if self.vals[key] in mode else mode[0],
+                            allow_blank=False,
+                            id=f"edit-{key}",
+                        )
+                    elif mode == "text":
+                        yield Input(value=self.vals[key], id=f"edit-{key}")
+                yield Label("[dim]↑↓ move · enter edit / confirm · ctrl+s save · esc back[/]", classes="field")
+
+        def on_mount(self) -> None:
+            for editor in self.query(".dialog Input, .dialog Select"):
+                editor.display = False
+            for key, _, mode in self.FIELDS:
+                self.query_one(f"#row-{key}", FieldRow).can_focus = mode != "readonly"
+            first = next((k for k, _, m in self.FIELDS if m != "readonly"), None)
+            if first:
+                self.query_one(f"#row-{first}").focus()
+
+        def shown(self, key: str) -> str:
+            value = self.vals[key]
+            return escape(value) if value else "[dim]-[/]"
+
+        def rows(self) -> list:
+            return [r for r in self.query(FieldRow) if r.can_focus]
+
+        def action_move(self, step: int) -> None:
+            rows = self.rows()
+            if self.editing or not rows:
+                return
+            now = rows.index(self.focused) if self.focused in rows else 0
+            rows[max(0, min(len(rows) - 1, now + step))].focus()
+
+        def action_edit_row(self) -> None:
+            if self.editing or not isinstance(self.focused, FieldRow):
+                return
+            key = self.focused.id.removeprefix("row-")
+            self.editing = key
+            self.focused.display = False
+            editor = self.query_one(f"#edit-{key}")
+            editor.display = True
+            if isinstance(editor, Input):
+                editor.value = self.vals[key]
+            editor.focus()
+            if isinstance(editor, Select):
+                editor.call_after_refresh(setattr, editor, "expanded", True)
+
+        def leave_edit(self, keep: bool) -> None:
+            key = self.editing
+            if key is None:
+                return
+            editor = self.query_one(f"#edit-{key}")
+            if keep and editor.value is not Select.BLANK:
+                self.vals[key] = str(editor.value).strip()
+            self.editing = None
+            editor.display = False
+            row = self.query_one(f"#row-{key}", FieldRow)
+            row.update(self.shown(key))
+            row.display = True
+            row.focus()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            event.stop()
+            self.leave_edit(keep=True)
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            event.stop()
+            if self.editing and event.select.id == f"edit-{self.editing}":
+                self.leave_edit(keep=True)
+
+        def validate(self, values: dict) -> str | None:
+            return None
+
+        def action_save(self) -> None:
+            self.leave_edit(keep=True)
+            editable = {k: self.vals[k] for k, _, m in self.FIELDS if m != "readonly"}
+            problem = self.validate(editable)
+            if problem:
+                self.notify(problem, severity="error")
+            else:
+                self.dismiss(editable)
+
+        def action_back(self) -> None:
+            if self.editing:
+                self.leave_edit(keep=False)
+            else:
+                self.dismiss(None)
+
+    class ItemForm(RowForm):
         FIELDS = [
-            ("summary", "Summary (one line)"),
-            ("why", "Why you started this"),
-            ("job", "Job (name; a new name creates a job; blank for none)"),
-            ("cwd", "Folder"),
-            ("agent", "Agent (claude / copilot)"),
-            ("session_id", "Session id"),
+            ("summary", "Summary (one line)", "text"),
+            ("why", "Why you started this", "text"),
+            ("job", "Job (name or id; a new name creates a job; blank for none)", "text"),
+            ("cwd", "Folder", "readonly"),
+            ("agent", "Agent", "readonly"),
+            ("session_id", "Session id", "readonly"),
         ]
 
         def validate(self, v: dict) -> str | None:
-            if not v["summary"]:
-                return "Summary is required"
-            if v["agent"] and v["agent"] not in AGENTS:
-                return "Agent must be claude or copilot"
-            return None
+            return None if v["summary"] else "Summary is required"
 
-    class JobForm(Form):
-        FIELDS = [("name", "Job name"), ("kind", "Kind (" + " / ".join(KINDS) + ")"), ("description", "Description")]
+    class JobForm(RowForm):
+        FIELDS = [
+            ("name", "Title", "text"),
+            ("ext_id", "ID (optional, e.g. a Jira key)", "text"),
+            ("kind", "Type", tuple(KINDS)),
+            ("parent", "Parent job (name or id; blank for none)", "text"),
+            ("description", "Description", "text"),
+        ]
 
         def validate(self, v: dict) -> str | None:
-            if not v["name"]:
-                return "Name is required"
-            if v["kind"] and v["kind"] not in KINDS:
-                return "Kind must be one of: " + ", ".join(KINDS)
-            return None
+            return None if v["name"] else "Title is required"
 
     class FilterForm(Form):
         FIELDS = [
@@ -267,6 +391,11 @@ def build_app():
         .dialog.wide { width: 100; }
         .field { margin-top: 1; color: $text-muted; }
         .dialog Input { height: 1; border: none; padding: 0 1; background: $boost; }
+        .dialog Select { height: 1; }
+        .dialog Select > SelectCurrent { border: none; height: 1; padding: 0 1; background: $boost; }
+        .row { height: 1; padding: 0 1; background: $boost; }
+        .row:focus { background: $primary 35%; text-style: bold; }
+        .row.ro { background: transparent; color: $text-disabled; }
         """
 
         def __init__(self) -> None:
@@ -645,7 +774,18 @@ def build_app():
                         if job_by_ref(db, v["name"], fuzzy=False):
                             self.notify("A job with that name exists", severity="error")
                             return
-                        ensure_job(db, v["name"], v["kind"] or None)["description"] = v["description"]
+                        try:
+                            create_job(
+                                db,
+                                v["name"],
+                                v["kind"],
+                                ext_id=v["ext_id"],
+                                parent=v["parent"] or None,
+                                desc=v["description"],
+                            )
+                        except SystemExit as err:  # core reports bad ids and parents by exiting
+                            self.notify(str(err.code), severity="error")
+                            return
                         save_db(db)
                         self.reload()
 
@@ -659,9 +799,7 @@ def build_app():
                         db,
                         v["summary"],
                         why=v["why"],
-                        cwd=v["cwd"] or None,
-                        agent=v["agent"] or None,
-                        session_id=v["session_id"] or None,
+                        cwd=os.getcwd(),
                         job=v["job"] or None,
                     )
                     save_db(db)
@@ -675,11 +813,7 @@ def build_app():
 
                 def done(v: dict | None) -> None:
                     if v:
-                        update(
-                            str(item["id"]),
-                            job=v.pop("job"),
-                            **{k: v[k] or None if k in ("cwd", "agent", "session_id") else v[k] for k in v},
-                        )
+                        update(str(item["id"]), job=v.pop("job"), **v)
                         self.reload(str(item["id"]))
 
                 self.push_screen(ItemForm(f"Edit #{item['id']}", {**item, "job": job_name(self.db, item)}), done)
@@ -689,11 +823,19 @@ def build_app():
                     if v:
                         db = load_db()
                         target = next(j for j in db["jobs"] if j["id"] == job["id"])
-                        target.update(name=v["name"], kind=v["kind"] or target["kind"], description=v["description"])
+                        try:
+                            check_ext_id(db, v["ext_id"], target)
+                            set_parent(db, target, v["parent"] or None)
+                        except SystemExit as err:
+                            self.notify(str(err.code), severity="error")
+                            return
+                        target.update(name=v["name"], kind=v["kind"], ext_id=v["ext_id"], description=v["description"])
                         save_db(db)
                         self.reload()
 
-                self.push_screen(JobForm(f"Edit J{job['id']}", job), job_done)
+                parent = next((j for j in self.db["jobs"] if j["id"] == job["parent_id"]), None)
+                values = {**job, "parent": job_label(parent) if parent else ""}
+                self.push_screen(JobForm(f"Edit {job_label(job)}", values), job_done)
 
         def action_delete(self) -> None:
             item, job = self.current_item(), self.current_job()

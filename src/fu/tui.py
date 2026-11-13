@@ -613,6 +613,7 @@ def build_app():
             self.full: dict[str, Text] = {}  # option id -> the entry's whole text
             self.revealed: str | None = None
             self.timer = None
+            self.dragging = False
 
         def action_back(self) -> None:
             self.app.focus_rows()
@@ -649,6 +650,28 @@ def build_app():
 
         def on_option_list_option_highlighted(self, event) -> None:
             self.arm()
+
+        # Drag the panel's left edge to resize it.
+        EDGE = 2  # columns from the left edge that grab the drag
+        MIN_WIDTH = 24
+
+        def on_mouse_down(self, event) -> None:
+            if event.x < self.EDGE:
+                self.dragging = True
+                self.capture_mouse()
+                event.stop()
+
+        def on_mouse_move(self, event) -> None:
+            if self.dragging:
+                room = self.screen.size.width - 4 - 30  # the table keeps at least 30 columns
+                self.styles.width = max(self.MIN_WIDTH, min(room, self.screen.size.width - 2 - event.screen_x))
+                event.stop()
+
+        def on_mouse_up(self, event) -> None:
+            if self.dragging:
+                self.dragging = False
+                self.release_mouse()
+                event.stop()
 
         def on_key(self, event) -> None:
             if self.revealed:

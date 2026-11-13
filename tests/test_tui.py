@@ -1238,3 +1238,20 @@ def test_a_slash_in_the_prompt_suggests_skills_and_tab_inserts_one(epic_board, m
         assert not box.display
 
     drive(steps)
+
+
+def test_dragging_the_panels_left_edge_resizes_it(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        p = panel(app)
+        wide = p.size.width
+        await pilot.mouse_down(p, offset=(0, 3))
+        await pilot.hover(offset=(p.region.x - 20, 5))  # 20 columns to the left
+        await pilot.mouse_up(p, offset=(0, 3))
+        await pilot.pause()
+        assert p.size.width > wide + 10
+        await pilot.hover(offset=(p.region.x - 40, 5))  # not dragging any more: nothing moves
+        await pilot.pause()
+        assert p.size.width > wide + 10 and not p.dragging
+
+    drive(steps)

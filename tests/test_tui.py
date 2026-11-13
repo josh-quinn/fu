@@ -914,3 +914,46 @@ def test_enter_on_the_tabs_does_nothing_and_escape_leaves(seeded):
         assert app.header is None
 
     drive(steps)
+
+
+def test_typing_on_a_header_starts_the_search_without_enter(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        for _ in range(30):
+            if app.header is not None:
+                break
+            await pilot.press("up")
+        await pilot.press("right", "right", "right", "g")  # Title column
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "Suggest"
+        assert app.screen.query_one(Input).value == "g"
+        assert app.jfilters == {"title": {"text": "g"}}
+        await pilot.press("r")
+        assert app.screen.query_one(Input).value == "gr"
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ != "Suggest"
+        assert app.jfilters == {"title": {"text": "gr"}}
+
+    drive(steps)
+
+
+def test_the_search_box_does_not_dim_the_board_behind_it(seeded):
+    async def steps(app, pilot):
+        await open_header(app, pilot, 3)
+        assert app.screen.styles.background.a == 0
+
+    drive(steps)
+
+
+def test_typing_on_a_date_header_does_not_open_anything(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        for _ in range(30):
+            if app.header is not None:
+                break
+            await pilot.press("up")
+        await pilot.press("right", "right", "right", "right", "g")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ != "Suggest" and app.jfilters == {}
+
+    drive(steps)

@@ -419,7 +419,11 @@ def build_app():
             self.query_one(".popup").styles.margin = (4, 0, 0, self.x)
             self.query_one(OptionList).can_focus = False
             self.fill(self.initial)
-            self.query_one(Input).focus()
+            box = self.query_one(Input)
+            box.focus()
+            box.cursor_position = len(self.initial)
+            if self.initial:
+                self.live(self.initial.strip())
 
         def fill(self, text: str) -> None:
             opts = self.query_one(OptionList)
@@ -805,6 +809,16 @@ def build_app():
             elif self.app.view == "jobs":
                 self.app.focus_panel()
 
+        def on_key(self, event) -> None:
+            """Typing on a Jobs header starts the search right away, without Enter."""
+            app = self.app
+            if app.view == "jobs" and app.header is not None and app.header >= 0 and event.is_printable:
+                col = JOB_COLUMNS_UI[app.header][0]
+                if col not in DATE_COLUMNS and event.character and event.character != " ":
+                    event.stop()
+                    event.prevent_default()
+                    app.filter_by_header(event.character)
+
         def action_select_cursor(self) -> None:
             if self.app.header is not None and self.app.header >= 0:
                 self.app.header_enter()
@@ -842,6 +856,7 @@ def build_app():
         #jobs-table { width: 7fr; }
         .detail { width: 3fr; height: 1fr; margin-left: 2; padding: 1 2; border-left: solid $primary 40%; }
         ModalScreen { align: center middle; background: $background 40%; }
+        Suggest { background: transparent; }  /* a search keeps the board in view; only dialogs dim it */
         .dialog { width: 76; height: auto; max-height: 90%; padding: 1 2; background: $surface;
                   border: round $primary; }
         .dialog.wide { width: 100; }
@@ -1319,10 +1334,15 @@ def build_app():
             self.refresh_jobs()
             self.update_chrome()
 
-        def filter_by_header(self) -> None:
-            col, label = JOB_COLUMNS_UI[self.header]
+        def filter_by_header(self, typed: str = "") -> None:
+            self.filter_column(self.header, typed)
+
+        def filter_column(self, n: int, typed: str = "") -> None:
+            """Open column n's filter: a search list (text, with `typed` already in the box), the kind
+            list, or the date picker."""
+            col, label = JOB_COLUMNS_UI[n]
             saved = self.jfilters.get(col)
-            x = self.header_x(self.header)
+            x = self.header_x(n)
             if col in DATE_COLUMNS:
                 start = date.fromisoformat(saved["from"]) if saved and saved["from"] == saved["to"] else date.today()
 
@@ -1341,9 +1361,9 @@ def build_app():
             self.push_screen(
                 Suggest(
                     label,
-                    lambda typed: suggestions(rows, col, typed),
-                    saved["text"] if saved and "text" in saved else "",
-                    lambda typed: self.set_jfilter(col, {"text": typed} if typed else None),
+                    lambda q: suggestions(rows, col, q),
+                    typed or (saved["text"] if saved and "text" in saved else ""),
+                    lambda value: self.set_jfilter(col, {"text": value} if value else None),
                     x,
                 ),
                 picked_text,

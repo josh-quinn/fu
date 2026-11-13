@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: ignores-plain-todo-comment
+expected_outcome: |
+  A TODO comment is added in train.py; nothing is added to the follow-up board.

@@ -1,0 +1,52 @@
+{
+  "items": [
+    {
+      "id": 1,
+      "summary": "Fix backprop gradient check",
+      "why": "Numerical and analytic grads disagree at layer 2",
+      "status": "doing",
+      "added": "2026-11-05",
+      "last_worked": "2026-11-10",
+      "agent": "claude",
+      "session_id": "11111111-1111-1111-1111-111111111111",
+      "cwd": "/Users/joshquinn/vault/msc-ai",
+      "notes": ""
+    },
+    {
+      "id": 2,
+      "summary": "Understand Adam vs SGD momentum",
+      "why": "Quiz question 4 confused me; re-derive the update rule",
+      "status": "todo",
+      "added": "2026-10-15",
+      "last_worked": "2026-10-21",
+      "agent": "claude",
+      "session_id": "22222222-2222-2222-2222-222222222222",
+      "cwd": "/Users/joshquinn/vault/msc-ai",
+      "notes": ""
+    },
+    {
+      "id": 3,
+      "summary": "Tidy week-1 notes",
+      "why": "Half-formatted headings",
+      "status": "todo",
+      "added": "2026-10-30",
+      "last_worked": "2026-11-03",
+      "agent": "claude",
+      "session_id": "33333333-3333-3333-3333-333333333333",
+      "cwd": "/Users/joshquinn/vault/msc-ai",
+      "notes": ""
+    },
+    {
+      "id": 4,
+      "summary": "Submit e-tivity 2",
+      "why": "Done and submitted",
+      "status": "done",
+      "added": "2026-10-01",
+      "last_worked": "2026-10-18",
+      "agent": "claude",
+      "session_id": "44444444-4444-4444-4444-444444444444",
+      "cwd": "/Users/joshquinn/vault/msc-ai",
+      "notes": ""
+    }
+  ]
+}

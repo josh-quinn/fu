@@ -599,9 +599,53 @@ def build_app():
         """The Jobs summary panel: Up/Down walk its entries, Enter acts on one, Left goes back to the rows."""
 
         BINDINGS = [Binding("left,escape", "back", show=False)]
+        REVEAL_AFTER = 1.0  # seconds the cursor rests on a long entry before its full text shows in place
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.full: dict[str, Text] = {}  # option id -> the entry's whole text
+            self.revealed: str | None = None
+            self.timer = None
 
         def action_back(self) -> None:
             self.app.focus_rows()
+
+        def entry_id(self) -> str | None:
+            return None if self.highlighted is None else self.get_option_at_index(self.highlighted).id
+
+        def collapse(self) -> None:
+            """Back to one truncated line; a keystroke or a move of the cursor does this."""
+            if self.timer:
+                self.timer.stop()
+                self.timer = None
+            if self.revealed in self.full:
+                self.replace_option_prompt(self.revealed, self.clip(self.full[self.revealed]))
+            self.revealed = None
+
+        @staticmethod
+        def clip(text: Text) -> Text:
+            clipped = text.copy()
+            clipped.no_wrap, clipped.overflow = True, "ellipsis"
+            return clipped
+
+        def arm(self) -> None:
+            self.collapse()
+            if self.entry_id() in self.full:
+                self.timer = self.set_timer(self.REVEAL_AFTER, self.reveal)
+
+        def reveal(self) -> None:
+            self.timer = None
+            key = self.entry_id()
+            if key in self.full and self.full[key].cell_len > self.size.width - 4:
+                self.replace_option_prompt(key, self.full[key])
+                self.revealed = key
+
+        def on_option_list_option_highlighted(self, event) -> None:
+            self.arm()
+
+        def on_key(self, event) -> None:
+            if self.revealed:
+                self.arm()
 
         def actionable(self) -> list[int]:
             return [n for n in range(self.option_count) if not self.get_option_at_index(n).disabled]
@@ -1049,11 +1093,14 @@ def build_app():
                 )
                 panel.add_options([Option(Text(msg, style="dim"), disabled=True)])
                 return
-            options = []
+            options, panel.full, panel.revealed = [], {}, None
             for e in summary.build(self.db, job):
                 text = Text(("\n" if e["style"] == "head" else "") + e["text"], style=self.STYLES[e["style"]])
                 if e["key"] and e["key"] not in ("notes",) and e["style"] == "action":
                     text.stylize("not dim")
+                if e["style"] == "action" and e["key"]:
+                    panel.full[e["key"]] = text
+                    text = panel.clip(text)
                 options.append(Option(text, id=e["key"], disabled=not e["enabled"]))
             panel.add_options(options)
 

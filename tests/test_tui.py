@@ -836,3 +836,41 @@ def test_the_bar_hints_at_the_panel_keys_while_you_are_in_it(epic_board):
         assert "panel:" not in str(app.query_one("#bar").render())
 
     drive(steps)
+
+
+def prompt_of(app, key):
+    p = panel(app)
+    return next(o.prompt for o in (p.get_option_at_index(n) for n in range(p.option_count)) if o.id == key)
+
+
+@pytest.fixture
+def long_child(epic_board):
+    db = core.load_db()
+    core.create_job(db, "Gradient check " + "with a very long descriptive title " * 4, "story", parent="ML-1")
+    core.save_db(db)
+
+
+def test_long_entries_are_clipped_to_one_line(epic_board, long_child):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        key = next(k for k in panel_keys(app) if k.startswith("job:") and "very long" in str(panel(app).full[k]))
+        assert prompt_of(app, key).no_wrap
+
+    drive(steps)
+
+
+def test_resting_on_an_entry_reveals_its_full_name_and_a_key_puts_it_back(epic_board, long_child):
+    async def steps(app, pilot):
+        panel(app).REVEAL_AFTER = 0.2
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "job:")
+        while "very long" not in str(panel(app).full[entry_key(app)]):
+            await pilot.press("down")
+        key = entry_key(app)
+        await pilot.pause(0.5)
+        assert not prompt_of(app, key).no_wrap and panel(app).revealed == key
+        await pilot.press("down")
+        await pilot.pause()
+        assert panel(app).revealed is None and prompt_of(app, key).no_wrap
+
+    drive(steps)

@@ -1,0 +1,8 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # The SLSA generator must be referenced by tag so slsa-verifier can check the builder
+        # identity (docs/adr/0006). Everything else stays pinned to a full commit SHA.
+        slsa-framework/slsa-github-generator/*: ref-pin
+        "*": hash-pin

@@ -16,6 +16,12 @@ DEFAULT_TOML = """\
 # follow-ups (fu) config
 # Where board.json and BOARD.md live. FU_DATA_DIR overrides this per command.
 data_dir = "~/development/follow-ups"
+
+[keys]
+# Held with a letter it runs a shortcut (a add, e edit, y copy ...) even while a column search is
+# typing, when plain letters type instead. "super" is Cmd and needs a terminal that reports it
+# (kitty, Ghostty, WezTerm, iTerm2 with CSI u); "alt" or "ctrl" work in any terminal.
+modifier = "super"
 """
 STATUSES = ("todo", "doing", "done")
 AGENTS = ("claude", "copilot")
@@ -44,6 +50,19 @@ def data_dir() -> Path:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(DEFAULT_TOML)
     return Path(cfg["data_dir"]).expanduser()
+
+
+DEFAULT_MODIFIER = "super"
+
+
+def key_modifier() -> str:
+    """The modifier that runs shortcuts while a search is typing (`[keys] modifier` in the config)."""
+    try:
+        keys = tomllib.loads(CONFIG_FILE.read_text()).get("keys", {}) if CONFIG_FILE.exists() else {}
+    except (OSError, ValueError):
+        return DEFAULT_MODIFIER
+    mod = keys.get("modifier", DEFAULT_MODIFIER)
+    return mod if mod in ("super", "alt", "ctrl", "meta") else DEFAULT_MODIFIER
 
 
 def today() -> str:

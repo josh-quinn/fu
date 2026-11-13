@@ -85,21 +85,21 @@ def test_jobs_headers_move_and_right_past_the_last_swipes_to_the_board(seeded):
     drive(steps)
 
 
-def test_enter_on_a_job_asks_before_restarting_its_latest_session(seeded):
+def test_alt_r_on_a_job_asks_before_restarting_its_latest_session(seeded):
     async def steps(app, pilot):
         await pilot.press("1")
         await select_job(app, pilot, "Backprop from scratch")  # the epic with two sessions
-        await pilot.press("enter")
+        await pilot.press("alt+r")
         assert app.screen.__class__.__name__ == "Confirm"
         await pilot.press("n")
         assert app.pick is None and app.view == "jobs"
-        await pilot.press("enter", "y")
+        await pilot.press("alt+r", "y")
         assert app.pick == "2"  # the most recently worked task of the job: "Vectorise softmax"
 
     drive(steps)
 
 
-def test_enter_on_a_job_with_no_session_just_says_so(seeded):
+def test_alt_r_on_a_job_with_no_session_just_says_so(seeded):
     async def steps(app, pilot):
         db = core.load_db()
         core.create_job(db, "Cheatsheet", "btw")
@@ -107,7 +107,7 @@ def test_enter_on_a_job_with_no_session_just_says_so(seeded):
         app.reload()
         await pilot.press("1")
         await select_job(app, pilot, "Cheatsheet")
-        await pilot.press("enter")
+        await pilot.press("alt+r")
         assert app.screen.__class__.__name__ != "Confirm"
 
     drive(steps)
@@ -955,5 +955,133 @@ def test_typing_on_a_date_header_does_not_open_anything(seeded):
         await pilot.press("right", "right", "right", "right", "g")
         await pilot.pause()
         assert app.screen.__class__.__name__ != "Suggest" and app.jfilters == {}
+
+    drive(steps)
+
+
+async def to_row(app, pilot, title):
+    await pilot.press("1")
+    await select_job(app, pilot, title)
+
+
+def test_enter_on_a_row_enters_column_mode_on_the_title_column(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter")
+        assert app.col == 3 and app.screen.__class__.__name__ != "Confirm"
+        await pilot.press("left", "left", "left", "left", "left")
+        assert app.col == 0  # stops at the first column
+        await pilot.press(*["right"] * 9)
+        assert app.col == 5  # and at the last
+
+    drive(steps)
+
+
+def test_up_and_down_in_column_mode_move_the_row_not_the_column(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter")
+        await pilot.pause()
+        seen = {app.current_job()["id"]}
+        for key in ("down", "up"):
+            await pilot.press(key)
+            await pilot.pause()
+            seen.add(app.current_job()["id"])
+        assert app.col == 3 and len(seen) == 2  # the other job was reached, the column never moved
+
+    drive(steps)
+
+
+def test_enter_enter_on_the_parent_column_shows_every_job_with_that_parent(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Gradient check")
+        await pilot.press("enter", "left")  # Title -> Parent
+        assert app.col == 2
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ == "Suggest"
+        assert app.screen.query_one(Input).value == "Backprop"  # the row's own parent
+        await pilot.press("enter")
+        assert app.jfilters == {"parent": {"text": "Backprop"}}
+        assert app.col == 2 and app.screen.__class__.__name__ != "Suggest"  # back on the highlighted column
+        assert app.query_one("#jobs-table", DataTable).row_count == 1
+
+    drive(steps)
+
+
+def test_typing_in_column_mode_searches_that_column(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter", "x")
+        assert app.screen.__class__.__name__ == "Suggest"
+        assert app.screen.query_one(Input).value == "x" and app.jfilters == {"title": {"text": "x"}}
+
+    drive(steps)
+
+
+def test_escape_in_column_mode_brings_back_all_results_then_leaves(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Gradient check")
+        await pilot.press("enter", "left", "enter", "enter")
+        assert app.jfilters
+        await pilot.press("escape")
+        assert not app.jfilters and app.col == 2
+        assert app.query_one("#jobs-table", DataTable).row_count == 2
+        await pilot.press("escape")
+        assert app.col is None
+
+    drive(steps)
+
+
+def test_enter_on_a_date_column_opens_the_picker_on_that_rows_date(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter", "right")  # Title -> Added
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ == "DatePick"
+
+    drive(steps)
+
+
+def test_plain_letters_type_in_column_mode_but_the_modifier_runs_shortcuts(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("2")  # a plain 2 is typed into the search, not the Board shortcut
+        await pilot.pause()
+        assert app.view == "jobs" and app.screen.__class__.__name__ == "Suggest"
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("super+2")
+        await pilot.pause()
+        assert app.view == "board" and app.col is None
+
+    drive(steps)
+
+
+def test_the_shortcut_modifier_comes_from_the_config(epic_board, tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg" / "follow-ups" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('[keys]\nmodifier = "alt"\n')
+    monkeypatch.setattr(core, "CONFIG_FILE", cfg)  # CONFIG_FILE is fixed at import, so point it at the sandbox
+
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("alt+2")
+        assert app.view == "board"
+
+    drive(steps)
+
+
+def test_switching_screens_leaves_column_mode(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.col == 3
+        await pilot.press("super+2")
+        assert app.col is None
 
     drive(steps)

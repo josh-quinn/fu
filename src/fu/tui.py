@@ -27,6 +27,7 @@ from fu.core import (
     job_name,
     job_resume_item,
     job_rows,
+    key_modifier,
     load_db,
     matches,
     new_item,
@@ -53,6 +54,7 @@ JOB_COLUMNS_UI = [
     ("added", "Added"),
     ("last_worked", "Last worked"),
 ]
+COLUMN_TINT = "on grey19"  # background of the column picked in column mode
 LIST_ROWS_TYPING = 6
 LIST_ROWS_EMPTY = 15
 COLUMNS = [
@@ -795,14 +797,18 @@ def build_app():
 
         def action_cursor_left(self) -> None:
             h = self.app.header
-            if h is not None and h < 0:
+            if self.app.col is not None:
+                self.app.column_move(-1)
+            elif h is not None and h < 0:
                 self.app.tab_move(-1)
             elif h is not None:
                 self.app.header_move(-1)
 
         def action_cursor_right(self) -> None:
             h = self.app.header
-            if h is not None and h < 0:
+            if self.app.col is not None:
+                self.app.column_move(1)
+            elif h is not None and h < 0:
                 self.app.tab_move(1)
             elif h is not None:
                 self.app.header_move(1)
@@ -812,6 +818,14 @@ def build_app():
         def on_key(self, event) -> None:
             """Typing on a Jobs header starts the search right away, without Enter."""
             app = self.app
+            if "+" in event.key and event.key != "plus":
+                return  # a chord (Cmd+2, Alt+R) is a shortcut, never text for the search
+            if app.view == "jobs" and app.col is not None and event.is_printable:
+                if event.character and event.character != " ":
+                    event.stop()
+                    event.prevent_default()
+                    app.column_search(event.character)
+                return
             if app.view == "jobs" and app.header is not None and app.header >= 0 and event.is_printable:
                 col = JOB_COLUMNS_UI[app.header][0]
                 if col not in DATE_COLUMNS and event.character and event.character != " ":
@@ -820,7 +834,9 @@ def build_app():
                     app.filter_by_header(event.character)
 
         def action_select_cursor(self) -> None:
-            if self.app.header is not None and self.app.header >= 0:
+            if self.app.col is not None:
+                self.app.column_search()
+            elif self.app.header is not None and self.app.header >= 0:
                 self.app.header_enter()
             else:
                 super().action_select_cursor()
@@ -831,6 +847,7 @@ def build_app():
             Binding("1", "view('jobs')", "Jobs"),
             Binding("2", "view('board')", "Board"),
             Binding("a", "add", "Add"),
+            Binding("alt+r", "start_session", "Session"),
             Binding("e", "edit", "Edit"),
             Binding("s", "advance", "Status"),
             Binding("d", "done", "Done"),
@@ -877,6 +894,9 @@ def build_app():
 
         def __init__(self) -> None:
             super().__init__()
+            mod = key_modifier()
+            for key, action in self.MODIFIED.items():
+                self.bind(f"{mod}+{key}", action, show=False)
             self.db: dict = {"items": [], "jobs": []}
             self.view = "board"
             self.header: int | None = None  # column header under the cursor, None while on the rows
@@ -885,6 +905,7 @@ def build_app():
             self.filters: dict = {}
             self.jfilters: dict = {}  # Jobs board: column -> filter
             self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
+            self.col: int | None = None  # Jobs column under column mode (Enter on a row), None outside it
             self.shown_job: int | None = None  # whose summary the panel currently shows
             self.pick: str | None = None
 
@@ -906,6 +927,24 @@ def build_app():
             self.reload()
             self.query_one("#table", DataTable).focus()
 
+        # Shortcuts that also answer to modifier+key (Cmd by default), the way to reach them while
+        # a column search is typing and plain letters belong to the search box.
+        MODIFIED = {
+            "1": "view('jobs')",
+            "2": "view('board')",
+            "a": "add",
+            "e": "edit",
+            "s": "advance",
+            "d": "done",
+            "t": "touch",
+            "y": "copy",
+            "x": "delete",
+            "f": "filter",
+            "c": "clear_filters",
+            "h": "help",
+            "q": "quit",
+        }
+
         OWN_ACTIONS = {
             "view",
             "add",
@@ -914,6 +953,7 @@ def build_app():
             "done",
             "touch",
             "copy",
+            "start_session",
             "delete",
             "filter",
             "clear_filters",
@@ -989,6 +1029,11 @@ def build_app():
                 + (
                     "   [b]panel:[/] [dim]↑ ↓ move · enter opens · ← back to the rows[/]"
                     if self.in_panel and self.view == "jobs"
+                    else ""
+                )
+                + (
+                    "   [b]column:[/] [dim]← → pick · ↑ ↓ row · type or enter searches · esc all/leave[/]"
+                    if self.col is not None and self.view == "jobs"
                     else ""
                 )
                 + (
@@ -1082,7 +1127,7 @@ def build_app():
                     Text(
                         label + mark,
                         style="reverse bold"
-                        if self.header == n and self.view == "jobs"
+                        if (self.header == n or self.col == n) and self.view == "jobs"
                         else ("bold" if col in self.jfilters else ""),
                     ),
                     key=col,
@@ -1090,7 +1135,7 @@ def build_app():
             table.show_cursor = not (self.header is not None and self.view == "jobs")
             for r in rows:
                 job = r["job"]
-                table.add_row(
+                cells = [
                     Text(r["id"], style="dim"),
                     Text(f"{KIND_GLYPH[r['kind']]} {r['kind']}"),
                     Text(clip(r["parent"], 14) or "-", style="" if r["parent"] else "dim"),
@@ -1100,8 +1145,10 @@ def build_app():
                         f"{r['last_worked']}  {age(r['last_worked'])}",
                         style=heat(idle_days(r)),
                     ),
-                    key=str(job["id"]),
-                )
+                ]
+                if self.col is not None:
+                    cells[self.col].stylize(COLUMN_TINT)  # column mode: the whole column stands out
+                table.add_row(*cells, key=str(job["id"]))
             ids = [str(r["job"]["id"]) for r in rows]
             if keep in ids:
                 table.move_cursor(row=ids.index(keep))
@@ -1236,7 +1283,7 @@ def build_app():
 
         def on_data_table_row_selected(self, event) -> None:
             if event.data_table.id == "jobs-table":
-                self.restart_job(self.current_job())
+                self.enter_column()
             else:
                 self.resume_item(self.table_item())
 
@@ -1266,6 +1313,7 @@ def build_app():
         def action_view(self, name: str) -> None:
             self.view = name
             self.header = None
+            self.col = None
             self.in_panel = False
             self.query_one(ContentSwitcher).current = name
             self.query_one("#table" if name == "board" else "#jobs-table", DataTable).focus()
@@ -1278,6 +1326,7 @@ def build_app():
             self.update_chrome()
 
         def enter_header(self) -> None:
+            self.col = None
             cols = COLUMNS if self.view == "board" else JOB_COLUMNS_UI
             # the Board opens on the column it is sorted by; Jobs on the first column
             self.header = (
@@ -1295,6 +1344,35 @@ def build_app():
             self.action_view(names[max(0, min(1, names.index(self.view) + step))])
             self.header = -1
             self.refresh_view()
+
+        # ---- column mode (Jobs): Enter on a row picks a whole column to search
+        def enter_column(self) -> None:
+            if self.current_job() is None:
+                return
+            self.col = self.col if self.col is not None else JOB_COLUMNS_UI.index(("title", "Title"))
+            self.refresh_view()
+
+        def leave_column(self) -> None:
+            self.col = None
+            self.refresh_view()
+
+        def column_move(self, step: int) -> None:
+            self.col = max(0, min(len(JOB_COLUMNS_UI) - 1, self.col + step))
+            self.refresh_view()
+
+        def column_search(self, typed: str = "") -> None:
+            """Search the highlighted column. Plain Enter starts from the highlighted row's own value, so
+            Enter, Enter shows every job that shares it (every child of a parent, say)."""
+            job = self.current_job()
+            if self.col is None or job is None:
+                return
+            col = JOB_COLUMNS_UI[self.col][0]
+            row = next(r for r in job_rows(self.db) if r["job"]["id"] == job["id"])
+            if col in DATE_COLUMNS:
+                if not typed:
+                    self.filter_column(self.col, start=date.fromisoformat(row[col]))
+                return
+            self.filter_column(self.col, typed or row[col])
 
         def leave_header(self) -> None:
             self.header = None
@@ -1337,14 +1415,16 @@ def build_app():
         def filter_by_header(self, typed: str = "") -> None:
             self.filter_column(self.header, typed)
 
-        def filter_column(self, n: int, typed: str = "") -> None:
+        def filter_column(self, n: int, typed: str = "", start: date | None = None) -> None:
             """Open column n's filter: a search list (text, with `typed` already in the box), the kind
             list, or the date picker."""
             col, label = JOB_COLUMNS_UI[n]
             saved = self.jfilters.get(col)
             x = self.header_x(n)
             if col in DATE_COLUMNS:
-                start = date.fromisoformat(saved["from"]) if saved and saved["from"] == saved["to"] else date.today()
+                start = start or (
+                    date.fromisoformat(saved["from"]) if saved and saved["from"] == saved["to"] else date.today()
+                )
 
                 def picked(v: dict | None) -> None:
                     if v is not None:
@@ -1380,6 +1460,12 @@ def build_app():
             col = COLUMNS[self.header][0]
             self.sort = (col, not self.sort[1]) if self.sort[0] == col else (col, False)
             self.refresh_view()
+
+        def action_start_session(self) -> None:
+            if self.view == "jobs":
+                self.restart_job(self.current_job())
+            else:
+                self.resume_item(self.table_item())
 
         def action_help(self) -> None:
             self.push_screen(Help())
@@ -1549,6 +1635,8 @@ def build_app():
         def action_clear_filters(self) -> None:
             if self.header is not None:
                 self.leave_header()
+            elif self.col is not None and not self.jfilters:
+                self.leave_column()
             elif self.view == "jobs" and self.jfilters:
                 self.jfilters = {}
                 self.reload()

@@ -1,0 +1,87 @@
+Changes 
+
+Edit: 
+- Session ID, agent and folder should not be editable - slightly greyed out 
+- Job type should be pre-defined with the default list 
+- arrows should move you up and down to editable sections, and enter to edit and enter again to move out of edit mode and ctrl+s save as usual. 
+
+board screen 
+- default screen 
+- press 2, not 1 
+- or when on jobs screen press right arrow key to "swipe" over to that screen 
+- arrows should bring you across the column headers 
+- pressing enter on column header orders in ascending or descending by that header 
+- when order by job, status should order by as well and date last worked, and then date added 
+- when order by status, should then order by last worked, and then date added 
+- only enter to order by 
+- only ascending or descening 
+
+Jobs 
+Job can be any piece of work or task 
+- epic 
+- spike 
+- story 
+- bug 
+- idea (this is the thing that pops in to my head and I start working on there and then) 
+- btw  (little things that come up during a session but would be good to keep - eg cheatsheets for log queries)
+- guide (so many side quests turn into runbooks or how-tos that this category feels important to add)
+
+- can have a specified id (eg jira) or may not (ideas or btws) 
+- some jobs contain multiple jobs 
+	- example: epic might have 5 stories 
+- some jobs span over multiple sessions 
+- some sessions might contain multiple jobs 
+	- example: working on an epic, happen to do 2 stories there, an idea comes up, and 3 btws 
+	- example: working on a story, copilot finds a bug, start fixing that, and an idea for ops mcp starts, 1 guide for promql) 
+
+Jobs TUI  
+- to enter jobs screen press 1 or press left arrow key while in Boards to "Swipe" left, only after left most column header in Board
+- I don't like the hierarchy folder type TUI 
+- Should be a Jobs board - almost like jira scrum board with ID, Type, Parent, Title, Added, Last Worked  
+- List of sessions should be removed actually. 
+- Filter by column headers. left and right move between headers, enter on header brings up dropdown to filter. 
+- filtering depends on header types
+	- for all, press enter on header, start typing, and smart filtering starts to predict options that you can scroll through as you type, shows up as search box near the header default list length of 6. this will also start filter list live.
+	- for all, you can type and press up and down on that search/filter box and while you type as well. Pressing enter locks in filter. 
+	- Type: default list pops up, still can search and live filters 
+	- Addned and last worked: press enter and: 
+		- todays date pops up: '<Month> <Day Number> <Year>' like 'Nov 13 2026'. Each of these are selectable by enter and navigable by left and right. Enter and either type and filter and up or down. default list sshown. 
+		- or  Under this is Select by..., hit enter and chose week, month or year. Options for each show. 
+		
+The larger summary in the right panel in jobs tui: 
+- 'Why' is good 
+- restart and notes both good
+- add "Artifacts" - when press enter, a box pop up with list of all files created by the session, scrollable, enter opens the artifact in associated app. 
+- if job spans multiple session add each as they come 
+- If child jobs add those 
+- If more than one sesion or job add all: 
+
+Sessions 
+- <agent> <id> · <title> 
+- <agent> <id> · <title> 
+
+Jobs
+- <ID>: <Type> <Title> (<Status>)
+- <ID>: <Type> <Title> (<Status>) 
+
+	- If just one job or session keep it on same line.  
+Session <agent> <id> · <title> 
+Job <ID>: <Type> <Title> (<Status>)
+
+
+- up and down scroll through rows in jobs board listing
+- pressing enter starts a session associated to that job: "Restart session?" message with yes or no. 
+- pressing right on a jobs listing brings to summary panel of that listing
+- pressing left at any time in summary brings back to jobs listing, 
+- up and down scroll through summary's Jobs, Sessions, Restart, Notes 
+- In summary panel: 
+	- pressing enter on job brings up that jobs row and summary, cursor starts within summary panel, not rows. 
+	- pressing enter on a session brings up box with "Restart" "Open session folder". Esc or left arrow key to exit box back to summary panel.
+	- press enter on notes to add or edit 
+
+
+
+
+
+
+	

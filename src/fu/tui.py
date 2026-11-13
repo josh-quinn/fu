@@ -70,13 +70,20 @@ HELP = """\
 [b]Screens[/]
   [b]2[/]  Board   every follow-up in one list (the default screen)
   [b]1[/]  Jobs    your jobs as a table: ID, Type, Parent, Title, Added, Last worked
-  [b]←[/]  on the Board's first column header: swipe over to Jobs
-  [b]→[/]  on the Jobs table's last column header: swipe over to the Board
+  [b]↑[/]  from the first row, step onto the column headers; [b]↑[/] again reaches the Jobs / Board tabs,
+     where [b]← →[/] switch screen and [b]↓[/] comes back to the headers
+  [b]←[/]  on the Board's first header: swipe over to Jobs;  [b]→[/] on the Jobs table's last header: to the Board
+  [b]alt+.[/]  show or hide the summary / detail panel
 
-[b]Moving and resuming[/]
+[b]Moving and starting sessions[/]
   [b]↑ ↓[/]     move through the rows
   [b]enter[/]   Board: resume the highlighted session (runs its restart command and exits)
-          Jobs: "Restart session?" for the job's most recently worked session
+          Jobs: pick a whole column to search (see Column mode)
+  [b]alt+r[/]   on a job (or inside its summary panel): sessions exist, so choose [b]Restart[/] or [b]New Session[/]
+          ([b]← →[/] choose, [b]↑ ↓[/] pick the session to restart). No sessions: go straight to New Session.
+          New Session asks for the agent, which context to hand over (why, notes, artifacts, parent, child
+          jobs, earlier sessions), a first prompt (type [b]/[/] for skills) and the folder (type a path for
+          live suggestions). [b]tab[/] completes, [b]ctrl+n[/] / [b]ctrl+p[/] pick, [b]ctrl+s[/] starts.
 
 [b]Working on a task[/]
   [b]a[/]  add a task (in the Jobs view: add a job)
@@ -94,25 +101,35 @@ HELP = """\
   Ties fall back to: job > status > last worked > added;  status > last worked > added.
 
 [b]Filtering (Jobs)[/]
-  [b]↑[/]      from the first row, step up onto the column headers;  [b]← →[/] move between them
-  [b]enter[/]  on a header: a search box opens under it. Type and the list suggests matches (an empty box lists
-          everything; once you type, 6 show and the rest scroll) while the table filters live. [b]↑ ↓[/] pick a suggestion; [b]enter[/] locks it in
-          (enter on an empty box clears that column's filter); [b]esc[/] puts the old filter back.
+  On a column header, just start typing to search it, or press [b]enter[/] to open the box. The list suggests
+  matches (an empty box lists everything; once you type, 6 show and the rest scroll) while the table filters
+  live. [b]↑ ↓[/] pick a suggestion; [b]enter[/] locks it in (on an empty box it clears that column);
+  [b]esc[/] puts the old filter back. The box does not dim the table behind it.
   Type  lists all seven kinds before you type, and searches them as you type.
   Added / Last worked  open a date picker on today: [b]← →[/] move across Month, Day, Year, Apply, Clear;
           [b]enter[/] on Month, Day or Year to type and pick; Apply filters to that day. [b]↓[/] to
           "Select by…" and [b]enter[/] to filter a whole week, month or year.
   [b]c[/]  clear every filter (the first [b]esc[/] just steps off the headers)
 
+[b]Column mode (Jobs)[/]
+  [b]enter[/]  on a row: the whole Title column lights up.  [b]← →[/] pick another column, [b]↑ ↓[/] move the row.
+  [b]enter[/]  searches that column starting from the highlighted row's own value, so enter, enter shows every
+          job with the same parent (or type, or title). Typing instead starts a fresh search.
+  [b]esc[/]    brings back every result; a second esc leaves column mode.
+  While in column mode plain letters type, so use the modifier for shortcuts: [b]cmd+a[/], [b]cmd+e[/], [b]cmd+2[/]
+  and so on. The modifier is [b]modifier[/] under \\[keys] in ~/.config/jq-tools/follow-ups/config.toml
+  ("super" is Cmd and needs a terminal that reports it; "alt" or "ctrl" work anywhere). [b].[/] stays plain.
+
 [b]The summary panel (Jobs)[/]
   [b]→[/]      on a job row, step into the panel on the right;  [b]←[/] (or esc) goes back to the rows
-  [b]↑ ↓[/]    move between its entries: child jobs, sessions, Restart, Artifacts, Notes
-  [b]enter[/]  on a job: jump to that job (you stay in the panel)
+  [b]↑ ↓[/]    move between its entries: Parent, child Jobs, Sessions, Artifacts, Notes. The cursor starts on
+          the parent when there is one. Long names are cut to one line; rest on one for a second to see all.
+  [b]enter[/]  on a job or the parent: jump to that job (you stay in the panel)
           on a session: Restart it, or Open session folder
-          on Restart: "Restart session?" for the most recent session
           on Artifacts: a list of what the sessions left (runbooks, explainers, skills, repos);
                         enter opens one in its app, [b]x[/] hides a wrong guess
           on Notes: add or edit a note ([b]ctrl+s[/] saves)
+  Drag the panel's left edge with the mouse to resize it.
 
 [b]Filtering (Board)[/]
   [b]f[/] or [b]/[/]  filter by text, job, status, agent, session, idle days, recently worked

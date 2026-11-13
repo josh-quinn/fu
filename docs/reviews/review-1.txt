@@ -1,0 +1,33 @@
+Comments
+Jobs board:
+Add these 
+- from headers, up, to jobs and board, and left and right to switch between. Instead of having to go trhough every header. 
+- function to enter column mode on row
+	- select enter on any row  
+	- whole column highlighted with thin outline, left and right moves column selection and outline,typing starts search with same options as on headers, enter fixes search and goes out of search back to column highlighted, esc brings back all results.
+	- in same column highligh up and down trigger row highlight, hit enter and search comes up with that rows value by default. So a quick enter and enter will show all rows for that value. good when you are on a row and parent column and you want to see all records for that parent.  
+	- header row should be same, typing without pressing enter should start dynamic search with options. the search box doesn't need to dim the whole tui like pressing enter.
+	- with this we need to add a ctontrol command for the shortcuts so a,e,y etc are availble - use cmd by default. make these configurable.  
+- keep show done shortcut '.' without cmd 
+- shortcut to show/hide summary pannel: alt + . 
+- shortcut to start a session with claude or copilot: alt + r while on a job row or in summary panel 
+	- if session(s) exists, ask user 'Restart?' and beside it 'New Session'. List of sessions under, up and down to navigate them, left right to navigate restart or new session.  
+	- if no session exists ask user:
+		- if they want to start a session with (if any exist for selected job) the why, jobs, artifacts, notes, context from listed jobs, or parent
+		- if they want to add prompt
+		- skills should be accessible in prompt text box
+		- where to start the session - typing paths should show up live text box search (see attached image - this is helix cli app)   
+
+Sumary panel:
+- remove 'Restart' - no need when sessions list is there 
+- jobs and sessions should not start new line by default. keeping cursor on for 1 sec reveals full name in place like on file system. any keystoke after just removes it and continue navigation without break.
+- should be able to resize panel by select+ dragging (if this is possble in tui)
+- If job has parent, parent should be included before Jobs.
+- This way, if select a job from a parent, to go back to parent its easier.
+- first header cursor should land in is parent, or job when no parent.
+- Single jobs and session should still go under Sessions and Jobs headings.
+
+
+TODOs:
+- Add atlassian jira interoperability.
+- Add light mode and dark mode 

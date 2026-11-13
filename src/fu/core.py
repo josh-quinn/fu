@@ -6,7 +6,7 @@ import shlex
 import sys
 import tempfile
 import tomllib
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 # All jq-tools configs live under ~/.config/jq-tools/<tool>/ (see ~/.claude/rules).
@@ -311,6 +311,102 @@ def sort_board(db: dict, items: list[dict], column: str = "status", descending: 
 
 def jobs_ordered(db: dict) -> list[dict]:
     return sorted(db["jobs"], key=lambda j: (KINDS.index(j["kind"]), j["name"].lower()))
+
+
+# ------------------------------------------------------------- jobs board
+
+JOB_COLUMNS = ("id", "kind", "parent", "title", "added", "last_worked")
+DATE_COLUMNS = ("added", "last_worked")
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def job_last_worked(db: dict, job: dict) -> str:
+    return max([i["last_worked"] for i in db["items"] if i.get("job_id") == job["id"]], default=job["created"])
+
+
+def job_rows(db: dict) -> list[dict]:
+    """One row per job with the columns of the Jobs board; newest activity first."""
+    by_id = {j["id"]: j for j in db["jobs"]}
+    rows = [
+        {
+            "job": j,
+            "id": job_label(j),
+            "kind": j["kind"],
+            "parent": by_id[j["parent_id"]]["name"] if j["parent_id"] in by_id else "",
+            "title": j["name"],
+            "added": j["created"],
+            "last_worked": job_last_worked(db, j),
+        }
+        for j in db["jobs"]
+    ]
+    return sorted(rows, key=lambda r: (r["last_worked"], r["job"]["id"]), reverse=True)
+
+
+def filter_jobs(rows: list[dict], filters: dict) -> list[dict]:
+    """filters: column -> {"text": ...} (case-insensitive contains) or {"from": iso, "to": iso}."""
+
+    def ok(row: dict) -> bool:
+        for col, f in filters.items():
+            if "text" in f and f["text"].lower() not in row[col].lower():
+                return False
+            if "from" in f and not f["from"] <= row[col] <= f["to"]:
+                return False
+        return True
+
+    return [r for r in rows if ok(r)]
+
+
+def suggestions(rows: list[dict], column: str, typed: str = "") -> list[str]:
+    """Distinct values of a column that match what has been typed, prefix matches first."""
+    values = list(KINDS) if column == "kind" else sorted({r[column] for r in rows if r[column]}, key=str.lower)
+    low = typed.strip().lower()
+    hits = [v for v in values if low in v.lower()]
+    return sorted(hits, key=lambda v: not v.lower().startswith(low))  # stable: prefix hits first
+
+
+def fmt_date(d: date) -> str:
+    return f"{MONTHS[d.month - 1]} {d.day} {d.year}"
+
+
+def date_range(unit: str, anchor: date) -> tuple[str, str]:
+    """The first and last day (ISO) of the day, Monday-based week, month or year around `anchor`."""
+    if unit == "day":
+        lo = hi = anchor
+    elif unit == "week":
+        lo = anchor - timedelta(days=anchor.weekday())
+        hi = lo + timedelta(days=6)
+    elif unit == "month":
+        lo = anchor.replace(day=1)
+        hi = lo.replace(year=lo.year + (lo.month == 12), month=lo.month % 12 + 1) - timedelta(days=1)
+    else:
+        lo, hi = date(anchor.year, 1, 1), date(anchor.year, 12, 31)
+    return lo.isoformat(), hi.isoformat()
+
+
+def range_options(unit: str, today_: date, count: int | None = None) -> list[tuple[str, str, str]]:
+    """(label, from, to) for the weeks, months or years leading up to today, newest first."""
+    out: list[tuple[str, str, str]] = []
+    for n in range(count or {"week": 8, "month": 12, "year": 4}[unit]):
+        if unit == "week":
+            anchor = today_ - timedelta(weeks=n)
+            lo, hi = date_range("week", anchor)
+            label = "This week" if n == 0 else "Last week" if n == 1 else f"Week of {fmt_date(date.fromisoformat(lo))}"
+        elif unit == "month":
+            month0 = today_.year * 12 + today_.month - 1 - n
+            anchor = date(month0 // 12, month0 % 12 + 1, 1)
+            label = f"{MONTHS[anchor.month - 1]} {anchor.year}"
+        else:
+            anchor = date(today_.year - n, 1, 1)
+            label = str(anchor.year)
+        lo, hi = date_range(unit, anchor)
+        out.append((label, lo, hi))
+    return out
+
+
+def job_resume_item(db: dict, job: dict) -> dict | None:
+    """The most recently worked task of the job that can be restarted: where Enter on a job resumes."""
+    items = [i for i in db["items"] if i.get("job_id") == job["id"] and resume_cmd(i)]
+    return max(items, key=lambda i: (i["last_worked"], i["id"]), default=None)
 
 
 def by_session(items: list[dict]) -> dict[str, list[dict]]:

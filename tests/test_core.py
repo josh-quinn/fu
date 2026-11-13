@@ -236,6 +236,103 @@ class TestBoardSort:
         assert self.names(db, "summary") == ["Alpha", "beta", "gamma"]
 
 
+class TestJobsBoard:
+    @staticmethod
+    def board():
+        db = core.load_db()
+        epic = core.create_job(db, "Backprop", "epic", ext_id="ML-1")
+        core.create_job(db, "Gradient check", "story", ext_id="ML-2", parent="ML-1")
+        core.create_job(db, "ReLU bug", "bug")
+        core.create_job(db, "Log queries", "btw")
+        epic["created"] = "2026-09-01"
+        db["jobs"][1]["created"] = "2026-10-05"
+        db["jobs"][2]["created"] = "2026-10-20"
+        db["jobs"][3]["created"] = "2026-11-02"
+        core.new_item(db, "t1", job="ML-2", last_worked="2026-11-10", agent="claude", session_id="s1")
+        core.new_item(db, "t2", job="ML-2", last_worked="2026-11-12", agent="copilot", session_id="s2")
+        core.new_item(db, "t3", job="ReLU bug", last_worked="2026-11-01")
+        return db
+
+    def test_rows_carry_the_columns_newest_activity_first(self):
+        rows = core.job_rows(self.board())
+        assert [r["title"] for r in rows] == ["Gradient check", "Log queries", "ReLU bug", "Backprop"]
+        story = rows[0]
+        assert (story["id"], story["kind"], story["parent"], story["added"]) == (
+            "ML-2",
+            "story",
+            "Backprop",
+            "2026-10-05",
+        )
+        assert story["last_worked"] == "2026-11-12"  # the latest of its tasks
+
+    def test_a_job_without_tasks_uses_the_day_it_was_created(self):
+        rows = {r["title"]: r for r in core.job_rows(self.board())}
+        assert rows["Backprop"]["last_worked"] == "2026-09-01"
+
+    def test_text_filter_is_a_case_insensitive_contains_on_that_column(self):
+        rows = core.job_rows(self.board())
+        out = core.filter_jobs(rows, {"title": {"text": "CHECK"}})
+        assert [r["title"] for r in out] == ["Gradient check"]
+        assert [r["title"] for r in core.filter_jobs(rows, {"parent": {"text": "back"}})] == ["Gradient check"]
+
+    def test_filters_on_several_columns_combine(self):
+        rows = core.job_rows(self.board())
+        out = core.filter_jobs(rows, {"kind": {"text": "story"}, "title": {"text": "relu"}})
+        assert out == []
+
+    def test_date_filter_is_inclusive_on_both_ends(self):
+        rows = core.job_rows(self.board())
+        out = core.filter_jobs(rows, {"added": {"from": "2026-10-05", "to": "2026-10-20"}})
+        assert sorted(r["title"] for r in out) == ["Gradient check", "ReLU bug"]
+
+    def test_suggestions_put_prefix_matches_first_and_cap_nothing(self):
+        rows = core.job_rows(self.board())
+        assert core.suggestions(rows, "title", "") == ["Backprop", "Gradient check", "Log queries", "ReLU bug"]
+        assert core.suggestions(rows, "title", "g") == ["Gradient check", "Log queries", "ReLU bug"]  # "bug" has a g
+        assert core.suggestions(rows, "title", "zzz") == []
+
+    def test_kind_suggestions_are_the_default_list_whether_or_not_a_job_uses_them(self):
+        assert core.suggestions(core.job_rows(core.load_db()), "kind") == list(core.KINDS)
+        assert core.suggestions([], "kind", "gu") == ["guide"]
+
+    def test_resume_picks_the_most_recent_restartable_task(self):
+        db = self.board()
+        job = core.job_by_ref(db, "ML-2")
+        assert core.job_resume_item(db, job)["session_id"] == "s2"
+        assert core.job_resume_item(db, core.job_by_ref(db, "ReLU bug")) is None  # no session captured
+
+
+class TestDates:
+    def test_format(self):
+        assert core.fmt_date(date(2026, 11, 13)) == "Nov 13 2026"
+
+    def test_week_runs_monday_to_sunday(self):
+        assert core.date_range("week", date(2026, 11, 13)) == ("2026-11-09", "2026-11-15")  # a Friday
+        assert core.date_range("week", date(2026, 11, 15)) == ("2026-11-09", "2026-11-15")  # the Sunday
+        assert core.date_range("week", date(2026, 11, 16)) == ("2026-11-16", "2026-11-22")  # next Monday
+
+    def test_month_handles_december_and_leap_february(self):
+        assert core.date_range("month", date(2026, 12, 9)) == ("2026-12-01", "2026-12-31")
+        assert core.date_range("month", date(2028, 2, 10)) == ("2028-02-01", "2028-02-29")
+
+    def test_year_and_day(self):
+        assert core.date_range("year", date(2026, 6, 1)) == ("2026-01-01", "2026-12-31")
+        assert core.date_range("day", date(2026, 6, 1)) == ("2026-06-01", "2026-06-01")
+
+    def test_week_options_lead_with_this_and_last_week(self):
+        opts = core.range_options("week", date(2026, 11, 13))
+        assert [o[0] for o in opts[:3]] == ["This week", "Last week", "Week of Oct 26 2026"]
+        assert opts[0][1:] == ("2026-11-09", "2026-11-15")
+        assert len(opts) == 8
+
+    def test_month_options_cross_the_year_boundary(self):
+        labels = [o[0] for o in core.range_options("month", date(2026, 2, 3), 4)]
+        assert labels == ["Feb 2026", "Jan 2026", "Dec 2025", "Nov 2025"]
+
+    def test_year_options(self):
+        assert [o[0] for o in core.range_options("year", date(2026, 11, 13))] == ["2026", "2025", "2024", "2023"]
+
+
 class TestSessions:
     def test_claude_session_comes_from_the_environment(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-1")

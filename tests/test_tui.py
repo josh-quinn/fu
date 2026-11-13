@@ -36,28 +36,105 @@ def test_help_opens_and_closes(seeded):
     drive(steps)
 
 
-def test_enter_on_a_job_filters_the_board_and_c_clears_it(seeded):
-    # Regression: clearing the filter after Enter on a job crashed, because the job
-    # detail panel looked the job up through a view-dependent helper.
+def jobs_table(app):
+    return app.query_one("#jobs-table", DataTable)
+
+
+def job_titles(app) -> list[str]:
+    table = jobs_table(app)
+    return [str(table.get_row_at(n)[3]) for n in range(table.row_count)]
+
+
+async def select_job(app, pilot, title: str) -> None:
+    """Move the Jobs cursor onto a job by title, however the rows happen to be ordered."""
+    want = job_titles(app).index(title)
+    gap = want - jobs_table(app).cursor_row
+    await pilot.press(*(["down"] * gap if gap > 0 else ["up"] * -gap))
+
+
+def test_jobs_screen_is_a_table_with_one_row_per_job_and_no_session_list(seeded):
     async def steps(app, pilot):
-        await pilot.press("1", "down", "enter")
-        await pilot.pause()
-        assert app.view == "board" and app.filters == {"job": 1}
-        assert app.query_one(DataTable).row_count == 2
-        await pilot.press("c")
-        await pilot.pause()
-        assert app.filters == {} and app.query_one(DataTable).row_count == 3
+        await pilot.press("1")
+        table = jobs_table(app)
+        assert [str(c.label).split(" ")[0] for c in table.columns.values()] == [
+            "ID",
+            "Type",
+            "Parent",
+            "Title",
+            "Added",
+            "Last",
+        ]
+        assert sorted(job_titles(app)) == ["Backprop from scratch", "ReLU derivative bug"]
+        assert not app.query("Tree")  # the folder tree and its Sessions list are gone
 
     drive(steps)
 
 
-def test_a_job_spread_over_sessions_shows_its_sessions_first(seeded):
+def test_jobs_headers_move_and_right_past_the_last_swipes_to_the_board(seeded):
     async def steps(app, pilot):
-        await pilot.press("1", "down", "right")
+        await pilot.press("1", "up")
+        assert app.view == "jobs" and app.header == 0
+        await pilot.press("left")
+        assert app.view == "jobs" and app.header == 0  # nothing to the left of the first header
+        await pilot.press(*["right"] * 5)
+        assert app.header == 5
+        await pilot.press("right")
+        assert app.view == "board" and app.header is None
+
+    drive(steps)
+
+
+def test_enter_on_a_job_asks_before_restarting_its_latest_session(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await select_job(app, pilot, "Backprop from scratch")  # the epic with two sessions
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ == "Confirm"
+        await pilot.press("n")
+        assert app.pick is None and app.view == "jobs"
+        await pilot.press("enter", "y")
+        assert app.pick == "2"  # the most recently worked task of the job: "Vectorise softmax"
+
+    drive(steps)
+
+
+def test_enter_on_a_job_with_no_session_just_says_so(seeded):
+    async def steps(app, pilot):
+        db = core.load_db()
+        core.create_job(db, "Cheatsheet", "btw")
+        core.save_db(db)
+        app.reload()
+        await pilot.press("1")
+        await select_job(app, pilot, "Cheatsheet")
+        await pilot.press("enter")
+        assert app.screen.__class__.__name__ != "Confirm"
+
+    drive(steps)
+
+
+def test_task_keys_do_nothing_on_the_jobs_screen(seeded):
+    async def steps(app, pilot):
+        before = [i["status"] for i in core.load_db()["items"]]
+        await pilot.press("1", "s", "d", "t")
+        assert [i["status"] for i in core.load_db()["items"]] == before
+
+    drive(steps)
+
+
+def test_deleting_a_job_lifts_its_child_jobs(seeded):
+    async def steps(app, pilot):
+        db = core.load_db()
+        epic = core.job_by_ref(db, "Backprop from scratch")
+        core.create_job(db, "Child story", "story", parent=epic["name"])
+        core.save_db(db)
+        app.reload()
+        await pilot.press("1")
+        await select_job(app, pilot, "Backprop from scratch")
+        await pilot.press("x", "y")
         await pilot.pause()
-        job_node = app.nodes[("job", 1)]
-        assert job_node.is_expanded
-        assert [c.data[0] for c in job_node.children] == ["jobsess", "jobsess"]
+        db = core.load_db()
+        assert core.job_by_ref(db, "Backprop from scratch") is None
+        assert core.job_by_ref(db, "Child story")["parent_id"] is None
 
     drive(steps)
 

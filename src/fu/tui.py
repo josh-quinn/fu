@@ -9,32 +9,41 @@ from fu.core import (
     KINDS,
     STATUSES,
     age,
-    by_session,
     check_ext_id,
     clip,
     create_job,
+    filter_jobs,
     heat,
     idle_days,
     job_by_ref,
     job_label,
     job_name,
-    jobs_ordered,
+    job_resume_item,
+    job_rows,
     load_db,
     matches,
     new_item,
+    remove_job,
     resume_cmd,
     save_db,
     session_label,
     set_parent,
     skey,
     sort_board,
-    sort_items,
     today,
     update,
 )
 
 # -------------------------------------------------------------------- TUI
 
+JOB_COLUMNS_UI = [
+    ("id", "ID"),
+    ("kind", "Type"),
+    ("parent", "Parent"),
+    ("title", "Title"),
+    ("added", "Added"),
+    ("last_worked", "Last worked"),
+]
 COLUMNS = [
     ("id", "ID"),
     ("status", "Status"),
@@ -45,27 +54,25 @@ COLUMNS = [
 ]
 
 HELP = """\
-[b]Views[/]
+[b]Screens[/]
   [b]2[/]  Board   every follow-up in one list (the default screen)
-  [b]1[/]  Jobs    a folder tree: Jobs (job > session > tasks) and Sessions (session > tasks)
+  [b]1[/]  Jobs    your jobs as a table: ID, Type, Parent, Title, Added, Last worked
   [b]←[/]  on the Board's first column header: swipe over to Jobs
+  [b]→[/]  on the Jobs table's last column header: swipe over to the Board
 
 [b]Moving and resuming[/]
-  [b]↑ ↓[/]     move
+  [b]↑ ↓[/]     move through the rows
   [b]enter[/]   Board: resume the highlighted session (runs its restart command and exits)
-          Jobs: on a task, resume it; on a job or session, open its tasks in the Board
-  [b]→[/]       Jobs: open the folder one level (job > sessions > tasks); again to step inside
-  [b]←[/]       Jobs: close the folder, or step back up to its parent
+          Jobs: "Restart session?" for the job's most recently worked session
 
 [b]Working on a task[/]
   [b]a[/]  add a task (in the Jobs view: add a job)
-  [b]e[/]  edit the task or job (summary, why, job, folder, agent, session)
+  [b]e[/]  edit the task or job (the session, agent and folder are locked)
   [b]s[/]  cycle status: todo > doing > done
   [b]d[/]  mark done (kept until you delete it)
   [b]t[/]  set last worked to today
   [b]y[/]  copy the restart command
-  [b]x[/]  delete the task (or job: its tasks are kept, unassigned)
-  [b]k[/]  Jobs: cycle the selected job's kind (epic > story > bug > spike > idea > btw > guide)
+  [b]x[/]  delete the task (or job: its tasks are kept, unassigned; child jobs move up)
 
 [b]Sorting (Board)[/]
   [b]↑[/]      from the first row, step up onto the column headers
@@ -104,7 +111,6 @@ def build_app():
         Label,
         Select,
         Static,
-        Tree,
     )
 
     BADGE = {"todo": ("○ todo", "yellow"), "doing": ("◐ doing", "cyan"), "done": ("● done", "green")}
@@ -347,33 +353,9 @@ def build_app():
                     return f"{k} must be a whole number of days"
             return None
 
-    class FolderTree(Tree):
-        """Right opens a folder (then steps into it); left closes it (then steps out)."""
-
-        auto_expand = False
-        BINDINGS = [Binding("right", "open_node", show=False), Binding("left", "close_node", show=False)]
-
-        def action_open_node(self) -> None:
-            node = self.cursor_node
-            if node is None or not node.allow_expand:
-                return
-            if not node.is_expanded:
-                node.expand()
-            elif node.children:
-                self.move_cursor(node.children[0])
-
-        def action_close_node(self) -> None:
-            node = self.cursor_node
-            if node is None:
-                return
-            if node.allow_expand and node.is_expanded:
-                node.collapse()
-            elif node.parent is not None and node.parent is not self.root:
-                self.move_cursor(node.parent)
-
-    class BoardTable(DataTable):
+    class HeaderTable(DataTable):
         """Up from the first row steps onto the column headers; there the arrows pick a
-        header, Enter sorts by it and Down returns to the rows."""
+        header, Enter acts on it (sort on the Board, filter on Jobs) and Down returns to the rows."""
 
         def action_cursor_up(self) -> None:
             if self.app.header is not None:
@@ -399,7 +381,7 @@ def build_app():
 
         def action_select_cursor(self) -> None:
             if self.app.header is not None:
-                self.app.sort_by_header()
+                self.app.header_enter()
             else:
                 super().action_select_cursor()
 
@@ -415,7 +397,6 @@ def build_app():
             Binding("t", "touch", "Worked today"),
             Binding("y", "copy", "Copy restart"),
             Binding("x", "delete", "Delete"),
-            Binding("k", "kind", "Kind"),
             Binding("f", "filter", "Filter"),
             Binding("slash", "filter", "Filter", show=False),
             Binding("c", "clear_filters", "Clear", show=False),
@@ -431,8 +412,8 @@ def build_app():
         #bar { height: 1; padding: 0 2; color: $text-muted; }
         #views { height: 1fr; }
         #board, #jobs { height: 1fr; padding: 1 2; }
-        #table, #tree { width: 5fr; height: 1fr; background: $background; }
-        #tree { padding-left: 1; }
+        #table, #jobs-table { width: 5fr; height: 1fr; background: $background; }
+        #jobs-table { width: 7fr; }
         .detail { width: 3fr; height: 1fr; margin-left: 2; padding: 1 2; border-left: solid $primary 40%; }
         ModalScreen { align: center middle; }
         .dialog { width: 76; height: auto; max-height: 90%; padding: 1 2; background: $surface;
@@ -455,8 +436,7 @@ def build_app():
             self.sort: tuple[str, bool] = ("status", False)  # (column, descending)
             self.show_done = False
             self.filters: dict = {}
-            self.expanded: set[tuple] = {("jobs",), ("sessions",)}
-            self.nodes: dict[tuple, object] = {}
+            self.jfilters: dict = {}  # Jobs board: column -> filter
             self.pick: str | None = None
 
         # ---- layout
@@ -466,19 +446,16 @@ def build_app():
             yield Static(id="bar")
             with ContentSwitcher(initial="board", id="views"):
                 with Horizontal(id="board"):
-                    yield BoardTable(id="table", cursor_type="row", zebra_stripes=False)
+                    yield HeaderTable(id="table", cursor_type="row", zebra_stripes=False)
                     yield Static(id="board-detail", classes="detail")
                 with Horizontal(id="jobs"):
-                    yield FolderTree("root", id="tree")
+                    yield HeaderTable(id="jobs-table", cursor_type="row", zebra_stripes=False)
                     yield Static(id="jobs-detail", classes="detail")
             yield Footer()
 
         def on_mount(self) -> None:
-            tree = self.query_one(FolderTree)
-            tree.show_root = False
-            tree.guide_depth = 3
             self.reload()
-            self.query_one(DataTable).focus()
+            self.query_one("#table", DataTable).focus()
 
         OWN_ACTIONS = {
             "view",
@@ -489,7 +466,6 @@ def build_app():
             "touch",
             "copy",
             "delete",
-            "kind",
             "filter",
             "clear_filters",
             "toggle_done",
@@ -502,15 +478,15 @@ def build_app():
                 return True  # Textual's own actions (Tab focus, quit, palette) must keep working in dialogs
             if isinstance(self.screen, ModalScreen):
                 return False  # our keys belong to the dialog
-            if action in ("filter", "clear_filters") and self.view != "board":
-                return False
-            return not (action == "kind" and self.view != "jobs")
+            if action == "filter" and self.view != "board":
+                return False  # the Jobs board filters through its column headers
+            return not (action in ("advance", "done", "touch") and self.view != "board")
 
         # ---- state
         def reload(self, keep=None) -> None:
             self.db = load_db()
             self.refresh_table(keep if isinstance(keep, str) else None)
-            self.refresh_tree()
+            self.refresh_jobs()
             self.update_chrome()
 
         def effective_filters(self) -> dict:
@@ -522,29 +498,21 @@ def build_app():
             )
 
         def table_item(self) -> dict | None:
-            table = self.query_one(DataTable)
-            if not table.row_count:
-                return None
-            key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+            key = self.cursor_key("#table")
             return next((i for i in self.db["items"] if str(i["id"]) == key), None)
 
-        def node_data(self) -> tuple | None:
-            node = self.query_one(FolderTree).cursor_node
-            return node.data if node is not None else None
+        def cursor_key(self, selector: str) -> str | None:
+            table = self.query_one(selector, DataTable)
+            if not table.row_count:
+                return None
+            return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
 
         def current_item(self) -> dict | None:
-            if self.view == "board":
-                return self.table_item()
-            data = self.node_data()
-            if data and data[0] == "item":
-                return next((i for i in self.db["items"] if i["id"] == data[1]), None)
-            return None
+            return self.table_item() if self.view == "board" else None
 
         def current_job(self) -> dict | None:
-            data = self.node_data()
-            if self.view == "jobs" and data and data[0] in ("job", "jobsess") and data[1] is not None:
-                return next((j for j in self.db["jobs"] if j["id"] == data[1]), None)
-            return None
+            key = self.cursor_key("#jobs-table") if self.view == "jobs" else None
+            return next((j for j in self.db["jobs"] if str(j["id"]) == key), None)
 
         def update_chrome(self) -> None:
             tabs = [("jobs", "1 Jobs"), ("board", "2 Board")]
@@ -560,6 +528,8 @@ def build_app():
                 + (f"   [b]filter:[/] {chips}  [dim](c clears)[/]" if chips and self.view == "board" else "")
                 + (
                     "   [b]headers:[/] [dim]← → move · enter sorts · ↓ back to rows · ← at the first swipes to Jobs[/]"
+                    if self.header is not None and self.view == "board"
+                    else "   [b]headers:[/] [dim]← → move · ↓ back to rows · → at the last swipes to the Board[/]"
                     if self.header is not None
                     else ""
                 )
@@ -634,139 +604,90 @@ def build_app():
             )
 
         # ---- jobs view
-        def task_label(self, i: dict) -> Text:
-            badge, colour = BADGE[i["status"]]
-            t = Text(f"{badge}  ", style=colour)
-            t.append(i["summary"], style="dim" if i["status"] == "done" else "bold")
-            t.append(f"   {age(i['last_worked'])}", style=heat(idle_days(i)))
-            return t
-
-        def folder_label(self, glyph: str, name: str, items: list[dict], extra: str = "") -> Text:
-            t = Text(f"{glyph} ")
-            t.append(name, style="bold")
-            open_n = sum(i["status"] != "done" for i in items)
-            t.append(f"   {extra}{open_n} open", style="dim")
-            if len(items) - open_n:
-                t.append(f" · {len(items) - open_n} done", style="dim")
-            return t
-
-        def refresh_tree(self) -> None:
-            tree = self.query_one(FolderTree)
-            cursor = self.node_data()
-            tree.clear()
-            self.nodes = {}
-            items = [i for i in self.db["items"] if self.show_done or i["status"] != "done"]
-
-            def folder(parent, key, label):
-                node = parent.add(label, data=key, expand=key in self.expanded)
-                self.nodes[key] = node
-                return node
-
-            def leaves(parent, group, ctx):
-                for i in sort_items(group):
-                    key = ("item", i["id"], ctx)
-                    self.nodes[key] = parent.add_leaf(self.task_label(i), data=key)
-
-            jobs_root = folder(tree.root, ("jobs",), Text("Jobs", style="bold"))
-            for job in [*jobs_ordered(self.db), None]:
-                jid = job["id"] if job else None
-                its = [i for i in items if i.get("job_id") == jid]
-                if job is None and not its:
-                    continue
-                sessions = by_session(its)
-                label = self.folder_label(
-                    KIND_GLYPH[job["kind"]] if job else "·",
-                    job["name"] if job else "(no job)",
-                    its,
-                    f"{job['kind']} · " if job else "",
+        def refresh_jobs(self) -> None:
+            keep = self.cursor_key("#jobs-table")
+            rows = filter_jobs(job_rows(self.db), self.jfilters)
+            table = self.query_one("#jobs-table", DataTable)
+            table.clear(columns=True)
+            for n, (col, label) in enumerate(JOB_COLUMNS_UI):
+                mark = " ●" if col in self.jfilters else ""
+                table.add_column(
+                    Text(
+                        label + mark,
+                        style="reverse bold"
+                        if self.header == n and self.view == "jobs"
+                        else ("bold" if col in self.jfilters else ""),
+                    ),
+                    key=col,
                 )
-                node = folder(jobs_root, ("job", jid), label)
-                if len(sessions) > 1:  # a job spread over sessions shows each session before its tasks
-                    for sk, group in sessions.items():
-                        snode = folder(
-                            node, ("jobsess", jid, sk), self.folder_label("⌁", session_label(sk, group), group)
-                        )
-                        leaves(snode, group, f"j{jid}:{sk}")
-                else:
-                    leaves(node, its, f"j{jid}")
-            sess_root = folder(tree.root, ("sessions",), Text("Sessions", style="bold"))
-            for sk, group in by_session(items).items():
-                snode = folder(sess_root, ("sess", sk), self.folder_label("⌁", session_label(sk, group), group))
-                leaves(snode, group, f"s{sk}")
-            if cursor is not None:
-                node = self.nodes.get(cursor)
-                if node is not None:
-                    self.call_after_refresh(lambda: tree.move_cursor(node))
+            table.show_cursor = not (self.header is not None and self.view == "jobs")
+            for r in rows:
+                job = r["job"]
+                table.add_row(
+                    Text(r["id"], style="dim"),
+                    Text(f"{KIND_GLYPH[r['kind']]} {r['kind']}"),
+                    Text(clip(r["parent"], 14) or "-", style="" if r["parent"] else "dim"),
+                    Text(job["name"], style="bold"),
+                    Text(r["added"], style="dim"),
+                    Text(
+                        f"{r['last_worked']}  {age(r['last_worked'])}",
+                        style=heat(idle_days(r)),
+                    ),
+                    key=str(job["id"]),
+                )
+            ids = [str(r["job"]["id"]) for r in rows]
+            if keep in ids:
+                table.move_cursor(row=ids.index(keep))
             self.show_jobs_detail()
 
         def show_jobs_detail(self) -> None:
-            data, panel = self.node_data(), self.query_one("#jobs-detail", Static)
-            if not data:
-                panel.update("[dim]No tasks yet.[/]")
-            elif data[0] == "item":
-                item = self.current_item()
-                panel.update(self.item_detail(item) if item else "")
-            elif data[0] in ("job", "jobsess") and data[1] is not None:
-                job = next(j for j in self.db["jobs"] if j["id"] == data[1])
-                its = [i for i in self.db["items"] if i.get("job_id") == data[1]]
-                sessions = by_session(its)
+            job, panel = self.current_job(), self.query_one("#jobs-detail", Static)
+            if not job:
                 panel.update(
-                    f"[b]{KIND_GLYPH[job['kind']]} {escape(job['name'])}[/]  [dim]{job['kind']}[/]\n\n"
-                    f"{escape(job['description']) or '[dim]No description. Press e to add one.[/]'}\n\n"
-                    f"[dim]Tasks[/]  {len(its)}   [dim]Sessions[/]  {len(sessions)}\n"
-                    + "".join(f"  ⌁ {escape(session_label(k, g))} ({len(g)})\n" for k, g in sessions.items())
-                    + "\n[dim]enter opens its tasks in the Board · → expands · k changes kind[/]"
+                    "[dim]No jobs yet. Press [b]a[/] to add one.[/]"
+                    if not self.db["jobs"]
+                    else "[dim]No job matches the filters. [b]c[/] clears them.[/]"
                 )
-            elif data[0] in ("sess", "jobsess"):
-                key = data[1] if data[0] == "sess" else data[2]
-                its = [i for i in self.db["items"] if skey(i) == key]
-                cmd = resume_cmd(its[0]) if its and key else None
-                jobs = sorted({job_name(self.db, i) for i in its if job_name(self.db, i)})
-                panel.update(
-                    f"[b]⌁ {escape(session_label(key, its))}[/]\n\n[dim]Tasks[/]  {len(its)}\n"
-                    f"[dim]Jobs[/]  {escape(', '.join(jobs)) or '-'}\n\n[dim]Restart[/]\n"
-                    f"{escape(cmd) if cmd else '[dim]no session id captured[/]'}\n\n[dim]enter opens its tasks in the Board[/]"
-                )
-            else:
-                panel.update(
-                    "[dim]→ opens this folder. h for help.[/]"
-                    if data[0] in ("jobs", "sessions")
-                    else "[dim]This job has no tasks yet.[/]"
-                )
+                return
+            row = next(r for r in job_rows(self.db) if r["job"] is job or r["job"]["id"] == job["id"])
+            item = job_resume_item(self.db, job)
+            cmd = resume_cmd(item) if item else None
+            panel.update(
+                f"[b]{KIND_GLYPH[job['kind']]} {escape(job['name'])}[/]\n"
+                f"[dim]{row['id']} · {job['kind']}"
+                + (f" · under {escape(row['parent'])}" if row["parent"] else "")
+                + "[/]\n\n"
+                f"[dim]Why[/]\n{escape(job['description']) or '[dim]No description. Press e to add one.[/]'}\n\n"
+                f"[dim]Restart[/]\n{escape(cmd) if cmd else '[dim]no session id captured[/]'}"
+            )
 
         # ---- events
         def on_data_table_row_highlighted(self, event) -> None:
-            self.show_board_detail()
+            if event.data_table.id == "jobs-table":
+                self.show_jobs_detail()
+            else:
+                self.show_board_detail()
 
         def on_data_table_row_selected(self, event) -> None:
-            self.resume_item(self.table_item())
-
-        def on_tree_node_highlighted(self, event) -> None:
-            self.show_jobs_detail()
-            self.refresh_bindings()
-
-        def on_tree_node_expanded(self, event) -> None:
-            self.expanded.add(event.node.data)
-
-        def on_tree_node_collapsed(self, event) -> None:
-            self.expanded.discard(event.node.data)
-
-        def on_tree_node_selected(self, event) -> None:
-            data = event.node.data
-            if data[0] == "item":
-                self.resume_item(self.current_item())
-            elif data[0] in ("jobs", "sessions"):
-                event.node.toggle()
+            if event.data_table.id == "jobs-table":
+                self.restart_job(self.current_job())
             else:
-                f: dict = {}
-                if data[0] in ("job", "jobsess"):
-                    f["job"] = data[1] if data[1] is not None else "none"
-                if data[0] == "jobsess":
-                    f["session"] = data[2] or "none"
-                if data[0] == "sess":
-                    f["session"] = data[1] or "none"
-                self.filters = f
-                self.action_view("board")
+                self.resume_item(self.table_item())
+
+        def restart_job(self, job: dict | None) -> None:
+            item = job_resume_item(self.db, job) if job else None
+            if not job:
+                return
+            if not item:
+                self.notify("This job has no session to restart", severity="warning")
+                return
+
+            def done(yes: bool | None) -> None:
+                if yes:
+                    self.pick = str(item["id"])
+                    self.exit()
+
+            self.push_screen(Confirm(f"Restart session?\n{item['agent']} · {item['summary']}"), done)
 
         def resume_item(self, item: dict | None) -> None:
             if item and resume_cmd(item):
@@ -780,35 +701,47 @@ def build_app():
             self.view = name
             self.header = None
             self.query_one(ContentSwitcher).current = name
-            self.query_one(DataTable if name == "board" else FolderTree).focus()
+            self.query_one("#table" if name == "board" else "#jobs-table", DataTable).focus()
             self.update_chrome()
-            self.show_jobs_detail() if name == "jobs" else self.refresh_table(None)
+            self.refresh_jobs() if name == "jobs" else self.refresh_table(None)
 
         # ---- column headers
-        def enter_header(self) -> None:
-            self.header = next((n for n, (c, _) in enumerate(COLUMNS) if c == self.sort[0]), 0)
-            self.refresh_table(None)
+        def refresh_view(self) -> None:
+            self.refresh_table(None) if self.view == "board" else self.refresh_jobs()
             self.update_chrome()
+
+        def enter_header(self) -> None:
+            cols = COLUMNS if self.view == "board" else JOB_COLUMNS_UI
+            # the Board opens on the column it is sorted by; Jobs on the first column
+            self.header = (
+                next((n for n, (c, _) in enumerate(cols) if c == self.sort[0]), 0) if self.view == "board" else 0
+            )
+            self.refresh_view()
 
         def leave_header(self) -> None:
             self.header = None
-            self.refresh_table(None)
-            self.update_chrome()
+            self.refresh_view()
 
         def header_move(self, step: int) -> None:
             if self.header is None:
                 return
-            if self.header + step < 0:
+            last = (len(COLUMNS) if self.view == "board" else len(JOB_COLUMNS_UI)) - 1
+            if self.view == "board" and self.header + step < 0:
                 self.action_view("jobs")  # swipe left past the first header onto Jobs
-                return
-            self.header = min(len(COLUMNS) - 1, self.header + step)
-            self.refresh_table(None)
+            elif self.view == "jobs" and self.header + step > last:
+                self.action_view("board")  # swipe right past the last header onto the Board
+            else:
+                self.header = max(0, min(last, self.header + step))
+                self.refresh_view()
+
+        def header_enter(self) -> None:
+            if self.view == "board":
+                self.sort_by_header()
 
         def sort_by_header(self) -> None:
             col = COLUMNS[self.header][0]
             self.sort = (col, not self.sort[1]) if self.sort[0] == col else (col, False)
-            self.refresh_table(None)
-            self.update_chrome()
+            self.refresh_view()
 
         def action_help(self) -> None:
             self.push_screen(Help())
@@ -837,22 +770,14 @@ def build_app():
         def action_copy(self) -> None:
             import subprocess
 
-            item = self.current_item()
+            job = self.current_job()
+            item = job_resume_item(self.db, job) if job else self.current_item()
             cmd = resume_cmd(item) if item else None
             if not cmd:
                 self.notify("Nothing to copy", severity="warning")
                 return
             subprocess.run(["pbcopy"], input=cmd.encode(), check=False)
             self.notify("Restart command copied")
-
-        def action_kind(self) -> None:
-            job = self.current_job()
-            if job:
-                db = load_db()
-                target = next(j for j in db["jobs"] if j["id"] == job["id"])
-                target["kind"] = KINDS[(KINDS.index(target["kind"]) + 1) % len(KINDS)]
-                save_db(db)
-                self.reload()
 
         def action_add(self) -> None:
             if self.view == "jobs":
@@ -943,14 +868,14 @@ def build_app():
                 def job_done(yes: bool | None) -> None:
                     if yes:
                         db = load_db()
-                        for i in db["items"]:
-                            if i.get("job_id") == job["id"]:
-                                i["job_id"] = None
-                        db["jobs"] = [j for j in db["jobs"] if j["id"] != job["id"]]
+                        remove_job(db, next(j for j in db["jobs"] if j["id"] == job["id"]))
                         save_db(db)
                         self.reload()
 
-                self.push_screen(Confirm(f"Delete job '{job['name']}'? Its tasks are kept, unassigned."), job_done)
+                self.push_screen(
+                    Confirm(f"Delete job '{job['name']}'? Its tasks are kept, unassigned; child jobs move up."),
+                    job_done,
+                )
 
         def action_filter(self) -> None:
             f = self.filters
@@ -986,7 +911,10 @@ def build_app():
         def action_clear_filters(self) -> None:
             if self.header is not None:
                 self.leave_header()
-            elif self.filters:
+            elif self.view == "jobs" and self.jfilters:
+                self.jfilters = {}
+                self.reload()
+            elif self.view == "board" and self.filters:
                 self.filters = {}
                 self.reload()
 

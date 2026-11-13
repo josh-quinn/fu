@@ -19,8 +19,13 @@ data_dir = "~/development/follow-ups"
 """
 STATUSES = ("todo", "doing", "done")
 AGENTS = ("claude", "copilot")
-KINDS = ("epic", "story", "task", "bug", "spike", "idea", "misc")
-KIND_GLYPH = {"epic": "◈", "story": "❖", "task": "▪", "bug": "✱", "spike": "↯", "idea": "✦", "misc": "·"}
+# idea: popped into your head and you started on it; btw: a small thing from a
+# session worth keeping; guide: a side quest that became a runbook or how-to.
+KINDS = ("epic", "story", "bug", "spike", "idea", "btw", "guide")
+KIND_GLYPH = {"epic": "◈", "story": "❖", "bug": "✱", "spike": "↯", "idea": "✦", "btw": "·", "guide": "≡"}
+DEFAULT_KIND = "story"
+# Kinds from boards written before these were the default list.
+LEGACY_KINDS = {"task": "story", "misc": "btw"}
 COPILOT_SESSIONS = Path("~/.copilot/session-state").expanduser()
 UNSET = object()
 
@@ -68,11 +73,15 @@ def resume_cmd(item: dict) -> str | None:
 
 
 def load_db() -> dict:
-    """Boards written before jobs existed have no 'jobs' list; that is fine."""
+    """Older boards are upgraded in memory: no 'jobs' list, legacy kinds, no ext_id/parent_id."""
     path = data_dir() / "board.json"
     db = json.loads(path.read_text()) if path.exists() else {}
     db.setdefault("items", [])
     db.setdefault("jobs", [])
+    for job in db["jobs"]:
+        job["kind"] = LEGACY_KINDS.get(job["kind"], job["kind"])
+        job.setdefault("ext_id", "")
+        job.setdefault("parent_id", None)
     return db
 
 
@@ -101,14 +110,21 @@ def find(items: list[dict], ident: str) -> dict:
 # -------------------------------------------------------------------- jobs
 
 
+def job_label(job: dict) -> str:
+    """What the user sees as the job's id: their own (e.g. a Jira key) or J<n>."""
+    return job.get("ext_id") or f"J{job['id']}"
+
+
 def job_by_ref(db: dict, ref, fuzzy: bool = True) -> dict | None:
-    """A job is addressed by id ('3' or 'J3') or by name (exact, else unique substring)."""
+    """A job is addressed by external id, 'J3'/'3', or name (exact, else unique substring)."""
     r = str(ref).strip()
-    if r[:1].lower() == "j" and r[1:].isdigit():
-        r = r[1:]
-    if r.isdigit():
-        return next((j for j in db["jobs"] if j["id"] == int(r)), None)
     low = r.lower()
+    for job in db["jobs"]:
+        if job["ext_id"] and job["ext_id"].lower() == low:
+            return job
+    num = low[1:].lstrip("-") if low[:1] == "j" else low
+    if num.isdigit():
+        return next((j for j in db["jobs"] if j["id"] == int(num)), None)
     exact = [j for j in db["jobs"] if j["name"].lower() == low]
     if exact:
         return exact[0]
@@ -118,21 +134,56 @@ def job_by_ref(db: dict, ref, fuzzy: bool = True) -> dict | None:
     return None
 
 
-def ensure_job(db: dict, ref: str, kind: str | None = None) -> dict:
-    # Exact match only when creating: a new name that happens to be a substring
-    # of an old one must not silently attach to it.
-    job = job_by_ref(db, ref, fuzzy=False)
-    if job:
-        return job
+def _check_ext_id(db: dict, ext_id: str, own: dict | None = None) -> None:
+    clash = next((j for j in db["jobs"] if j is not own and ext_id and j["ext_id"].lower() == ext_id.lower()), None)
+    if clash:
+        sys.exit(f"fu: id {ext_id} is already used by job '{clash['name']}'")
+
+
+def descendants(db: dict, job: dict) -> list[dict]:
+    out, queue = [], [job]
+    while queue:
+        cur = queue.pop()
+        for child in db["jobs"]:
+            if child["parent_id"] == cur["id"] and child not in out:
+                out.append(child)
+                queue.append(child)
+    return out
+
+
+def set_parent(db: dict, job: dict, ref) -> None:
+    """Parent by ref, or None/'none' to clear. A job can't sit under itself or its own children."""
+    if ref is None or str(ref).strip().lower() in ("", "none"):
+        job["parent_id"] = None
+        return
+    parent = job_by_ref(db, ref) or sys.exit(f"fu: no job matching '{ref}'")
+    if parent is job or parent in descendants(db, job):
+        sys.exit(f"fu: '{parent['name']}' can't be the parent of '{job['name']}' (that would make a loop)")
+    job["parent_id"] = parent["id"]
+
+
+def create_job(db: dict, name: str, kind: str | None = None, ext_id: str = "", parent=None, desc: str = "") -> dict:
+    ext_id = ext_id.strip()
+    _check_ext_id(db, ext_id)
     job = {
         "id": next_id(db["jobs"]),
-        "name": ref.strip(),
-        "kind": kind or "misc",
-        "description": "",
+        "name": name.strip(),
+        "kind": kind or DEFAULT_KIND,
+        "ext_id": ext_id,
+        "parent_id": None,
+        "description": desc,
         "created": today(),
     }
     db["jobs"].append(job)
+    if parent:
+        set_parent(db, job, parent)
     return job
+
+
+def ensure_job(db: dict, ref: str, kind: str | None = None) -> dict:
+    # Exact match only when creating: a new name that happens to be a substring
+    # of an old one must not silently attach to it.
+    return job_by_ref(db, ref, fuzzy=False) or create_job(db, ref, kind)
 
 
 def job_name(db: dict, item: dict) -> str:

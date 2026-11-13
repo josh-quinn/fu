@@ -1,6 +1,8 @@
 import json
 from datetime import date, timedelta
 
+import pytest
+
 from fu import core
 
 
@@ -36,6 +38,15 @@ class TestStorage:
 
 
 class TestJobs:
+    def test_legacy_kinds_and_missing_fields_are_upgraded_on_load(self):
+        path = core.data_dir()
+        path.mkdir(parents=True)
+        legacy = {"items": [], "jobs": [{"id": 1, "name": "a", "kind": "misc"}, {"id": 2, "name": "b", "kind": "task"}]}
+        (path / "board.json").write_text(json.dumps(legacy))
+        jobs = core.load_db()["jobs"]
+        assert [j["kind"] for j in jobs] == ["btw", "story"]
+        assert all(j["ext_id"] == "" and j["parent_id"] is None for j in jobs)
+
     def test_lookup_by_id_prefixed_id_exact_and_unique_substring(self, seeded):
         assert core.job_by_ref(seeded, "1")["name"] == "Backprop from scratch"
         assert core.job_by_ref(seeded, "J2")["name"] == "ReLU derivative bug"
@@ -58,6 +69,58 @@ class TestJobs:
         item = seeded["items"][0]
         core.set_job(seeded, item, "none")
         assert item["job_id"] is None
+
+
+class TestJobHierarchy:
+    def test_default_kinds_are_the_agreed_list(self):
+        assert core.KINDS == ("epic", "story", "bug", "spike", "idea", "btw", "guide")
+
+    def test_new_job_defaults_to_a_story_with_no_external_id(self):
+        db = core.load_db()
+        job = core.create_job(db, "Ship fu")
+        assert (job["kind"], job["ext_id"], job["parent_id"]) == ("story", "", None)
+        assert core.job_label(job) == "J1"
+
+    def test_external_id_is_free_text_and_addresses_the_job(self):
+        db = core.load_db()
+        job = core.create_job(db, "Cache invalidation", "bug", ext_id="OPS-1234")
+        assert core.job_label(job) == "OPS-1234"
+        assert core.job_by_ref(db, "ops-1234") is job
+        assert core.job_by_ref(db, "J1") is job
+
+    def test_external_ids_are_unique_ignoring_case(self):
+        db = core.load_db()
+        core.create_job(db, "One", ext_id="OPS-1")
+        with pytest.raises(SystemExit):
+            core.create_job(db, "Two", ext_id="ops-1")
+
+    def test_a_job_can_sit_under_a_parent(self):
+        db = core.load_db()
+        epic = core.create_job(db, "Backprop", "epic")
+        story = core.create_job(db, "Gradient check", "story", parent="Backprop")
+        assert story["parent_id"] == epic["id"]
+        assert core.descendants(db, epic) == [story]
+
+    def test_loops_are_refused(self):
+        db = core.load_db()
+        epic = core.create_job(db, "Backprop", "epic")
+        story = core.create_job(db, "Gradient check", parent="Backprop")
+        with pytest.raises(SystemExit):
+            core.set_parent(db, epic, "Gradient check")
+        with pytest.raises(SystemExit):
+            core.set_parent(db, story, "Gradient check")
+
+    def test_parent_none_clears_it(self):
+        db = core.load_db()
+        core.create_job(db, "Backprop", "epic")
+        story = core.create_job(db, "Gradient check", parent="Backprop")
+        core.set_parent(db, story, "none")
+        assert story["parent_id"] is None
+
+    def test_unknown_parent_is_an_error(self):
+        db = core.load_db()
+        with pytest.raises(SystemExit):
+            core.create_job(db, "Orphan", parent="nope")
 
 
 class TestResumeCommand:

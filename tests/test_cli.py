@@ -143,3 +143,92 @@ def test_the_skill_is_packaged_with_the_library():
     from importlib.resources import files
 
     assert (files("fu") / "skills" / "follow-ups" / "SKILL.md").is_file()
+
+
+def make_doc(tmp_path, name="runbook.md") -> str:
+    doc = tmp_path / "notes" / name
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text("# how to")
+    return str(doc)
+
+
+def claude_wrote(tmp_path, sid: str, *paths: str) -> None:
+    import json as _json
+
+    calls = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": p}}]},
+        }
+        for p in paths
+    ]
+    f = tmp_path / "home" / ".claude" / "projects" / "proj" / f"{sid}.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("\n".join(_json.dumps(c) for c in calls))
+
+
+@pytest.fixture
+def relaxed_scratch(monkeypatch):
+    # pytest's temp folder is under /var/folders, which the detection ignores by design
+    from fu import artifacts
+
+    monkeypatch.setattr(artifacts, "SCRATCH", ("/scratchpad/", "/node_modules/", "/.git/"))
+
+
+def test_add_with_an_artifact_stores_it_with_the_label(monkeypatch, capsys, tmp_path, relaxed_scratch):
+    doc = make_doc(tmp_path)
+    run(monkeypatch, capsys, "add", "Write the runbook", "--artifact", doc, "--label", "Prod runbook")
+    shown = json.loads(run(monkeypatch, capsys, "show", "1", "--json"))
+    assert [(a["label"], a["source"]) for a in shown["artifacts"]] == [("Prod runbook", "manual")]
+
+
+def test_a_label_needs_exactly_one_artifact(monkeypatch, capsys, tmp_path):
+    with pytest.raises(SystemExit, match="--label"):
+        run(monkeypatch, capsys, "add", "x", "--label", "orphan label")
+
+
+def test_show_lists_the_artifacts_the_session_left_behind(monkeypatch, capsys, tmp_path, relaxed_scratch):
+    doc = make_doc(tmp_path)
+    claude_wrote(tmp_path, "sess-9", doc)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    run(monkeypatch, capsys, "add", "Debug the cache")
+    out = run(monkeypatch, capsys, "show", "1")
+    assert "artifacts" in out and "doc" in out and "runbook.md" in out and doc in out
+
+
+def test_dismissing_a_wrongly_detected_artifact_hides_it_for_good(monkeypatch, capsys, tmp_path, relaxed_scratch):
+    doc = make_doc(tmp_path)
+    claude_wrote(tmp_path, "sess-9", doc)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    run(monkeypatch, capsys, "add", "Debug the cache")
+    run(monkeypatch, capsys, "edit", "1", "--dismiss-artifact", doc)
+    run(monkeypatch, capsys, "touch", "1")  # re-detects; the dismissal must stick
+    assert json.loads(run(monkeypatch, capsys, "show", "1", "--json"))["artifacts"] == []
+
+
+def test_done_snapshots_the_artifacts_so_they_outlive_the_transcript(monkeypatch, capsys, tmp_path, relaxed_scratch):
+    doc = make_doc(tmp_path)
+    claude_wrote(tmp_path, "sess-9", doc)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    run(monkeypatch, capsys, "add", "Debug the cache")
+    run(monkeypatch, capsys, "done", "1")
+    (tmp_path / "home" / ".claude" / "projects" / "proj" / "sess-9.jsonl").unlink()
+    from fu import artifacts
+
+    artifacts._cache.clear()
+    assert [a["path"] for a in json.loads(run(monkeypatch, capsys, "show", "1", "--json"))["artifacts"]] == [doc]
+
+
+def test_show_prints_the_session_title(monkeypatch, capsys, tmp_path):
+    import json as _json
+
+    f = tmp_path / "home" / ".claude" / "projects" / "proj" / "sess-9.jsonl"
+    f.parent.mkdir(parents=True)
+    f.write_text(_json.dumps({"type": "ai-title", "aiTitle": "Fix the cache bug", "sessionId": "sess-9"}))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    run(monkeypatch, capsys, "add", "Debug the cache")
+    assert "Fix the cache bug" in run(monkeypatch, capsys, "show", "1")

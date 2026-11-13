@@ -7,6 +7,7 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
+from fu import artifacts
 from fu.core import (
     AGENTS,
     CONFIG_FILE,
@@ -46,6 +47,26 @@ from fu.core import (
 # --------------------------------------------------------------- commands
 
 
+def apply_artifact_flags(item: dict, a) -> None:
+    """--artifact PATH (repeatable, --label names it when there is one) and --dismiss-artifact PATH."""
+    paths = a.artifact or []
+    if a.label and len(paths) != 1:
+        sys.exit("fu: --label names a single --artifact")
+    for path in paths:
+        artifacts.add_manual(item, path, a.label)
+    for path in getattr(a, "dismiss_artifact", None) or []:
+        artifacts.dismiss(item, str(Path(path).expanduser()))
+
+
+def public_full(item: dict, db: dict) -> dict:
+    """The JSON/show view of an item, with its session title and artifacts."""
+    return {
+        **public(item, db),
+        "session_title": artifacts.session_title(item.get("agent"), item.get("session_id")) or None,
+        "artifacts": artifacts.item_artifacts(item),
+    }
+
+
 def cmd_add(a) -> None:
     db = load_db()
     cwd = str(Path(a.cwd).expanduser().resolve()) if a.cwd else os.getcwd()
@@ -62,9 +83,11 @@ def cmd_add(a) -> None:
         job=a.job,
         kind=a.kind,
     )
+    apply_artifact_flags(item, a)
+    artifacts.snapshot(item)
     save_db(db)
     if a.json:
-        print(json.dumps(public(item, db), indent=2))
+        print(json.dumps(public_full(item, db), indent=2))
         return
     job = job_name(db, item)
     print(f"added #{item['id']}: {item['summary']}" + (f"  [job: {job}]" if job else ""))
@@ -108,7 +131,7 @@ def cmd_ls(a) -> None:
 
 def cmd_show(a) -> None:
     db = load_db()
-    item = public(find(db["items"], a.id), db)
+    item = public_full(find(db["items"], a.id), db)
     if a.json:
         print(json.dumps(item, indent=2))
         return
@@ -122,11 +145,19 @@ def cmd_show(a) -> None:
         "last_worked",
         "agent",
         "session_id",
+        "session_title",
         "cwd",
         "notes",
         "resume",
     ):
         print(f"{key:<12} {item.get(key) or '-'}")
+    arts = item["artifacts"]
+    print(f"{'artifacts':<12} " + ("-" if not arts else ""))
+    for art in arts:
+        print(
+            f"  {art['kind']:<6} {art['label']}  {art['path']}"
+            + ("  (added by you)" if art["source"] == "manual" else "")
+        )
 
 
 def cmd_edit(a) -> None:
@@ -141,16 +172,30 @@ def cmd_edit(a) -> None:
     }
     changes = {k: v for k, v in fields.items() if v is not None}
     item = update(a.id, job=UNSET if a.job is None else a.job, kind=a.kind, **changes)
+    if a.artifact or a.dismiss_artifact:
+        db = load_db()
+        item = find(db["items"], a.id)
+        apply_artifact_flags(item, a)
+        save_db(db)
     print(f"updated #{item['id']}")
 
 
+def update_and_snapshot(ident: str, **changes) -> None:
+    """Apply the changes and remember the session's artifacts in the same write."""
+    db = load_db()
+    item = find(db["items"], ident)
+    item.update(changes)
+    artifacts.snapshot(item)
+    save_db(db)
+
+
 def cmd_touch(a) -> None:
-    update(a.id, last_worked=today())
+    update_and_snapshot(a.id, last_worked=today())
     print(f"#{a.id} last worked: today")
 
 
 def cmd_done(a) -> None:
-    update(a.id, status="done", last_worked=today())
+    update_and_snapshot(a.id, status="done", last_worked=today())
     print(f"#{a.id} done (kept on the board until you delete it; `fu ls --all` shows it)")
 
 
@@ -350,6 +395,13 @@ def main() -> None:
     sp.add_argument("--why", help="why you started it / where you left off")
     sp.add_argument("--job", help="job name or id to file it under (a new name creates the job)")
     sp.add_argument("--kind", choices=KINDS, help="kind for a newly created job (default story)")
+    sp.add_argument(
+        "--artifact",
+        action="append",
+        metavar="PATH",
+        help="a file or folder worth keeping from this work (runbook, explainer, skill, repo); repeatable",
+    )
+    sp.add_argument("--label", help="name for the one --artifact given")
     sp.add_argument("--agent", choices=AGENTS, help="default: detected from the environment")
     sp.add_argument("--session-id", help="default: detected for the chosen agent")
     sp.add_argument("--cwd", help="default: current folder")
@@ -383,6 +435,16 @@ def main() -> None:
     sp.add_argument("--session-id")
     sp.add_argument("--cwd")
     sp.add_argument("--note")
+    sp.add_argument(
+        "--artifact",
+        action="append",
+        metavar="PATH",
+        help="a file or folder worth keeping from this work (runbook, explainer, skill, repo); repeatable",
+    )
+    sp.add_argument("--label", help="name for the one --artifact given")
+    sp.add_argument(
+        "--dismiss-artifact", action="append", metavar="PATH", help="hide a wrongly detected artifact for good"
+    )
 
     for name, fn, h in (
         ("touch", cmd_touch, "set last worked to today"),

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from fu import artifacts
-from fu.core import KIND_GLYPH, by_session, job_label, job_resume_item, job_status, resume_cmd
+from fu.core import KIND_GLYPH, by_session, job_label, job_status
 
 
 def session_line(agent: str | None, sid: str, cwd: str | None) -> str:
@@ -38,13 +38,12 @@ def sessions_of(db: dict, job: dict) -> list[tuple[str, list[dict]]]:
 def build(db: dict, job: dict) -> list[dict]:
     """Entries: {"key": None | action key, "style": title|meta|head|text|action, "text": str, "enabled": bool}.
 
-    Keys: restart, notes, artifacts, session:<agent:id>, job:<id>. A lone session or child job shares
-    one line with its label; several get a heading and a line each.
+    Keys: notes, artifacts, session:<agent:id>, job:<id>. The parent comes first so a child can climb
+    back to it; Parent, Jobs and Sessions always get a heading, even for a single entry.
     """
     parent = next((j for j in db["jobs"] if j["id"] == job["parent_id"]), None)
     children = [j for j in db["jobs"] if j["parent_id"] == job["id"]]
     sessions = sessions_of(db, job)
-    resume = job_resume_item(db, job)
     items = [i for i in db["items"] if i.get("job_id") == job["id"]]
     latest = max(items, key=lambda i: (i["last_worked"], i["id"]), default=None)
     arts = job_artifacts(db, job)
@@ -62,35 +61,24 @@ def build(db: dict, job: dict) -> list[dict]:
         job["description"] or (latest["why"] if latest and latest["why"] else "No description. Press e to add one."),
     )
 
-    if len(children) == 1:
-        add("action", "Job  " + job_line(db, children[0]), f"job:{children[0]['id']}")
-    elif children:
+    if parent:
+        add("head", "Parent")
+        add("action", job_line(db, parent), f"job:{parent['id']}")
+
+    if children:
         add("head", "Jobs")
         for child in sorted(children, key=lambda j: j["id"]):
             add("action", job_line(db, child), f"job:{child['id']}")
 
-    def first(group):
-        return group[0]
-
-    if len(sessions) == 1:
-        k, group = sessions[0]
-        add(
-            "action",
-            "Session  " + session_line(first(group)["agent"], first(group)["session_id"], first(group).get("cwd")),
-            f"session:{k}",
-        )
-    elif sessions:
+    if sessions:
         add("head", "Sessions")
         for k, group in sessions:
+            latest_task = group[0]
             add(
                 "action",
-                session_line(first(group)["agent"], first(group)["session_id"], first(group).get("cwd")),
+                session_line(latest_task["agent"], latest_task["session_id"], latest_task.get("cwd")),
                 f"session:{k}",
             )
-
-    add("head", "Restart")
-    cmd = resume_cmd(resume) if resume else None
-    add("action" if cmd else "text", cmd or "no session id captured", "restart" if cmd else None)
 
     add("head", "Artifacts")
     add("action" if arts else "text", f"{len(arts)} to open" if arts else "none yet", "artifacts" if arts else None)

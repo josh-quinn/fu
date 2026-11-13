@@ -769,19 +769,6 @@ def test_a_sessions_missing_folder_is_reported_not_opened(epic_board, monkeypatc
     drive(steps)
 
 
-def test_enter_on_restart_asks_before_resuming_like_the_row_does(epic_board):
-    async def steps(app, pilot):
-        await open_panel(app, pilot)
-        await goto_entry(app, pilot, "restart")
-        await pilot.press("enter")
-        assert app.screen.__class__.__name__ == "Confirm"
-        await pilot.press("y")
-        softmax = next(i for i in core.load_db()["items"] if i["summary"] == "softmax")
-        assert app.pick == str(softmax["id"])
-
-    drive(steps)
-
-
 def test_enter_on_artifacts_lists_them_and_enter_opens_one_in_its_app(epic_board, monkeypatch):
     from fu import artifacts
 

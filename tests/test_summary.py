@@ -82,12 +82,12 @@ def test_several_child_jobs_get_a_heading_and_a_line_each(board):
     assert keys(e)[:2] == [f"job:{core.job_by_ref(db, r)['id']}" for r in ("ML-2", "ML-3")]
 
 
-def test_a_lone_child_job_shares_a_line_with_its_label(board):
+def test_a_lone_child_job_still_sits_under_the_jobs_heading(board):
     db, epic = board
     core.remove_job(db, core.job_by_ref(db, "ML-3"))
     e = summary.build(db, epic)
-    assert "Jobs" not in texts(e, "head")
-    assert "Job  ML-2: story Gradient check (done)" in texts(e)
+    assert "Jobs" in texts(e, "head")
+    assert "ML-2: story Gradient check (done)" in texts(e)
 
 
 def test_several_sessions_get_a_heading_most_recent_first(board, isolated):
@@ -102,13 +102,13 @@ def test_several_sessions_get_a_heading_most_recent_first(board, isolated):
     ]  # folder name stands in for a missing title
 
 
-def test_a_lone_session_shares_a_line_with_its_label(board):
+def test_a_lone_session_still_sits_under_the_sessions_heading(board):
     db, _ = board
     story = core.job_by_ref(db, "ML-2")
     core.new_item(db, "more", job="ML-2", agent="claude", session_id="cccc3333-z", cwd="/w")
     e = summary.build(db, story)
-    assert "Sessions" not in texts(e, "head")
-    assert "Session  claude cccc3333 · w" in texts(e)
+    assert "Sessions" in texts(e, "head")
+    assert "claude cccc3333 · w" in texts(e)
 
 
 def test_a_job_without_children_or_sessions_omits_those_sections(isolated):
@@ -116,15 +116,28 @@ def test_a_job_without_children_or_sessions_omits_those_sections(isolated):
     job = core.create_job(db, "Cheatsheet", "btw")
     e = summary.build(db, job)
     assert not {"Jobs", "Sessions"} & set(texts(e, "head"))
-    assert keys(e) == ["notes"]  # nothing to restart, nothing to open
-    assert "no session id captured" in texts(e) and "none yet" in texts(e)
+    assert keys(e) == ["notes"]  # nothing to jump to, nothing to open
+    assert "none yet" in texts(e)
 
 
-def test_restart_shows_the_command_for_the_latest_session(board):
+def test_there_is_no_restart_entry_since_the_sessions_list_covers_it(board):
     db, epic = board
     e = summary.build(db, epic)
-    assert "cd /d && copilot --resume=bbbb2222-y" in texts(e)
-    assert "restart" in keys(e)
+    assert "restart" not in keys(e) and "Restart" not in texts(e, "head")
+
+
+def test_a_child_lists_its_parent_first_so_climbing_back_is_one_step(board):
+    db, epic = board
+    story = core.job_by_ref(db, "ML-2")
+    e = summary.build(db, story)
+    assert texts(e, "head")[:2] == ["Why", "Parent"]
+    assert keys(e)[0] == f"job:{epic['id']}"
+    assert texts(e, "action")[0] == f"{core.job_label(epic)}: epic Backprop (doing)"
+
+
+def test_a_job_without_a_parent_has_no_parent_heading(board):
+    db, epic = board
+    assert "Parent" not in texts(summary.build(db, epic), "head")
 
 
 def test_artifacts_collect_across_every_task_each_path_once(board, isolated):

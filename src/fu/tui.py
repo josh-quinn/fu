@@ -1105,9 +1105,7 @@ def build_app():
             job, key = self.current_job(), event.option.id or ""
             if not job:
                 return
-            if key == "restart":
-                self.restart_job(job)
-            elif key == "notes":
+            if key == "notes":
                 self.edit_notes(job)
             elif key == "artifacts":
                 self.push_screen(ArtifactList(summary.job_artifacts(self.db, job)))

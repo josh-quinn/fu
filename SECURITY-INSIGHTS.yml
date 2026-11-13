@@ -1,0 +1,42 @@
+# OpenSSF Security Insights v2 (https://github.com/ossf/security-insights). Read by the
+# OpenSSF Privateer Baseline scanner and LFX Insights. Validate against the current schema.
+header:
+  schema-version: 2.0.0
+  last-updated: '2026-11-13'
+  last-reviewed: '2026-11-13'
+  url: https://github.com/josh-quinn/fu/blob/main/SECURITY-INSIGHTS.yml
+project:
+  name: fu
+  homepage: https://github.com/josh-quinn/fu
+  repositories:
+    - name: fu
+      url: https://github.com/josh-quinn/fu
+      comment: Source code
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    policy: https://github.com/josh-quinn/fu/blob/main/SECURITY.md
+repository:
+  url: https://github.com/josh-quinn/fu
+  status: active
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  core-team:
+    - name: Josh Quinn
+      primary: true
+  license:
+    url: https://github.com/josh-quinn/fu/blob/main/LICENSE
+    expression: MIT
+  security:
+    assessments:
+      self:
+        comment: https://github.com/josh-quinn/fu/blob/main/SECURITY.md
+    tools:
+      - name: gitleaks
+        type: secret-scanning
+        rulesets: [default]
+        integration: {adhoc: false, ci: true, release: false}
+      - name: OSV-Scanner
+        type: SCA
+        rulesets: [default]
+        integration: {adhoc: false, ci: true, release: true}

@@ -859,6 +859,7 @@ def build_app():
             Binding("c", "clear_filters", "Clear", show=False),
             Binding("escape", "clear_filters", "Clear", show=False),
             Binding("full_stop", "toggle_done", "Show done"),
+            Binding("alt+full_stop", "toggle_panel", "Panel"),
             Binding("h", "help", "Help"),
             Binding("question_mark", "help", "Help", show=False),
             Binding("q", "quit", "Quit"),
@@ -905,6 +906,7 @@ def build_app():
             self.filters: dict = {}
             self.jfilters: dict = {}  # Jobs board: column -> filter
             self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
+            self.panel_shown = True  # the detail / summary panel beside the table (alt+. toggles it)
             self.col: int | None = None  # Jobs column under column mode (Enter on a row), None outside it
             self.shown_job: int | None = None  # whose summary the panel currently shows
             self.pick: str | None = None
@@ -958,6 +960,7 @@ def build_app():
             "filter",
             "clear_filters",
             "toggle_done",
+            "toggle_panel",
             "help",
             "quit",
         }
@@ -1194,6 +1197,8 @@ def build_app():
             panel = self.query_one("#jobs-detail", SummaryList)
             if self.current_job() is None:
                 return
+            if not self.panel_shown:
+                self.set_panel(True)
             at = next((n for n in range(panel.option_count) if key and panel.get_option_at_index(n).id == key), None)
             panel.highlighted = at if at is not None else self.first_enabled()
             panel.focus()
@@ -1486,6 +1491,16 @@ def build_app():
 
         def action_touch(self) -> None:
             self.mutate(last_worked=today())
+
+        def set_panel(self, shown: bool) -> None:
+            self.panel_shown = shown
+            for sel in ("#jobs-detail", "#board-detail"):
+                self.query_one(sel).display = shown
+            if not shown and self.in_panel:
+                self.focus_rows()
+
+        def action_toggle_panel(self) -> None:
+            self.set_panel(not self.panel_shown)
 
         def action_toggle_done(self) -> None:
             self.show_done = not self.show_done

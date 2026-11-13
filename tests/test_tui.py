@@ -1085,3 +1085,28 @@ def test_switching_screens_leaves_column_mode(epic_board):
         assert app.col is None
 
     drive(steps)
+
+
+def test_alt_full_stop_hides_and_shows_the_panel_and_right_reopens_it(epic_board):
+    async def steps(app, pilot):
+        await to_row(app, pilot, "Backprop")
+        assert panel(app).display
+        await pilot.press("alt+full_stop")
+        assert not panel(app).display and not app.query_one("#board-detail").display
+        await pilot.press("alt+full_stop")
+        assert panel(app).display
+        await pilot.press("alt+full_stop", "right")  # entering the panel shows it again
+        await pilot.pause()
+        assert panel(app).display and app.in_panel
+
+    drive(steps)
+
+
+def test_hiding_the_panel_while_inside_it_returns_to_the_rows(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        assert app.in_panel
+        await pilot.press("alt+full_stop")
+        assert not app.in_panel and app.focused.id == "jobs-table"
+
+    drive(steps)

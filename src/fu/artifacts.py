@@ -7,6 +7,8 @@ what the agent recorded: Claude Code's transcript, Copilot's events and its per-
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from fu import core
@@ -195,3 +197,13 @@ def add_manual(item: dict, path: str, label: str | None = None) -> dict:
 def dismiss(item: dict, path: str) -> None:
     item["artifacts"] = [a for a in item.get("artifacts", []) if a["path"] != path]
     item["artifacts_dismissed"] = sorted({*item.get("artifacts_dismissed", []), path})
+
+
+def open_path(path: str) -> bool:
+    """Open a file or folder in whatever app the system associates with it."""
+    cmd = ["open", path] if sys.platform == "darwin" else ["xdg-open", path]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603 - fixed system opener, path is one argument
+    except OSError:
+        return False
+    return True

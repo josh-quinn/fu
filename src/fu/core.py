@@ -82,6 +82,7 @@ def load_db() -> dict:
         job["kind"] = LEGACY_KINDS.get(job["kind"], job["kind"])
         job.setdefault("ext_id", "")
         job.setdefault("parent_id", None)
+        job.setdefault("notes", "")
     return db
 
 
@@ -186,6 +187,7 @@ def create_job(db: dict, name: str, kind: str | None = None, ext_id: str = "", p
         "ext_id": ext_id,
         "parent_id": None,
         "description": desc,
+        "notes": "",
         "created": today(),
     }
     db["jobs"].append(job)
@@ -318,6 +320,12 @@ def jobs_ordered(db: dict) -> list[dict]:
 JOB_COLUMNS = ("id", "kind", "parent", "title", "added", "last_worked")
 DATE_COLUMNS = ("added", "last_worked")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def job_status(db: dict, job: dict) -> str:
+    """A job has no status of its own: doing if any task is, done once every task is, else todo."""
+    states = [i["status"] for i in db["items"] if i.get("job_id") == job["id"]]
+    return "doing" if "doing" in states else "done" if states and all(x == "done" for x in states) else "todo"
 
 
 def job_last_worked(db: dict, job: dict) -> str:

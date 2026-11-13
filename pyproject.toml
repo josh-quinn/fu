@@ -40,6 +40,7 @@ exclude = ["**/evals"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = ["default_scratch_rules: keep the temp-folder rule of fu.artifacts switched on"]
 
 [tool.coverage.run]
 source = ["fu"]

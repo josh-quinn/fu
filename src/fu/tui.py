@@ -771,31 +771,42 @@ def build_app():
         header, Enter acts on it (sort on the Board, filter on Jobs) and Down returns to the rows."""
 
         def action_cursor_up(self) -> None:
-            if self.app.header is not None:
-                return
-            if self.cursor_row == 0 or not self.row_count:
-                self.app.enter_header()
-            else:
-                super().action_cursor_up()
+            h = self.app.header
+            if h is None:
+                if self.cursor_row == 0 or not self.row_count:
+                    self.app.enter_header()
+                else:
+                    super().action_cursor_up()
+            elif h >= 0:
+                self.app.enter_tabs()  # one more Up reaches the Jobs / Board tabs
 
         def action_cursor_down(self) -> None:
-            if self.app.header is not None:
-                self.app.leave_header()
-            else:
+            h = self.app.header
+            if h is None:
                 super().action_cursor_down()
+            elif h < 0:
+                self.app.enter_header()
+            else:
+                self.app.leave_header()
 
         def action_cursor_left(self) -> None:
-            if self.app.header is not None:
+            h = self.app.header
+            if h is not None and h < 0:
+                self.app.tab_move(-1)
+            elif h is not None:
                 self.app.header_move(-1)
 
         def action_cursor_right(self) -> None:
-            if self.app.header is not None:
+            h = self.app.header
+            if h is not None and h < 0:
+                self.app.tab_move(1)
+            elif h is not None:
                 self.app.header_move(1)
             elif self.app.view == "jobs":
                 self.app.focus_panel()
 
         def action_select_cursor(self) -> None:
-            if self.app.header is not None:
+            if self.app.header is not None and self.app.header >= 0:
                 self.app.header_enter()
             else:
                 super().action_select_cursor()
@@ -939,8 +950,14 @@ def build_app():
 
         def update_chrome(self) -> None:
             tabs = [("jobs", "1 Jobs"), ("board", "2 Board")]
+            on_tabs = self.header == -1
             self.query_one("#tabs", Static).update(
-                "   ".join(f"[reverse b] {t} [/]" if v == self.view else f"[dim] {t} [/]" for v, t in tabs)
+                "   ".join(
+                    (f"[reverse b u] {t} [/]" if on_tabs else f"[reverse b] {t} [/]")
+                    if v == self.view
+                    else f"[dim] {t} [/]"
+                    for v, t in tabs
+                )
             )
             items = self.db["items"]
             n = {s: sum(i["status"] == s for i in items) for s in STATUSES}
@@ -960,9 +977,11 @@ def build_app():
                     else ""
                 )
                 + (
-                    "   [b]headers:[/] [dim]← → move · enter sorts · ↓ back to rows · ← at the first swipes to Jobs[/]"
+                    "   [b]screens:[/] [dim]← → switch between Jobs and Board · ↓ to the headers[/]"
+                    if self.header == -1
+                    else "   [b]headers:[/] [dim]← → move · enter sorts · ↑ screens · ↓ back to rows[/]"
                     if self.header is not None and self.view == "board"
-                    else "   [b]headers:[/] [dim]← → move · ↓ back to rows · → at the last swipes to the Board[/]"
+                    else "   [b]headers:[/] [dim]← → move · enter filters · ↑ screens · ↓ back to rows[/]"
                     if self.header is not None
                     else ""
                 )
@@ -1249,6 +1268,17 @@ def build_app():
             self.header = (
                 next((n for n, (c, _) in enumerate(cols) if c == self.sort[0]), 0) if self.view == "board" else 0
             )
+            self.refresh_view()
+
+        def enter_tabs(self) -> None:
+            self.header = -1
+            self.refresh_view()
+
+        def tab_move(self, step: int) -> None:
+            """On the tab row ← → switch screen and stay on the tab row."""
+            names = ["jobs", "board"]
+            self.action_view(names[max(0, min(1, names.index(self.view) + step))])
+            self.header = -1
             self.refresh_view()
 
         def leave_header(self) -> None:

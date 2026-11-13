@@ -115,8 +115,12 @@ def test_enter_on_a_job_with_no_session_just_says_so(seeded):
 
 async def open_header(app, pilot, n: int) -> None:
     """Jobs screen, step onto the headers, move to header n and press Enter."""
-    # the cursor can sit on any row, so press Up until it has stepped onto the headers (extra Ups do nothing there)
-    await pilot.press("1", *["up"] * 15, *["right"] * n, "enter")
+    await pilot.press("1")
+    for _ in range(30):  # the cursor can sit on any row: Up until it has stepped onto the headers
+        if app.header is not None:
+            break
+        await pilot.press("up")
+    await pilot.press(*["right"] * n, "enter")
     await pilot.pause()
 
 
@@ -872,5 +876,41 @@ def test_resting_on_an_entry_reveals_its_full_name_and_a_key_puts_it_back(epic_b
         await pilot.press("down")
         await pilot.pause()
         assert panel(app).revealed is None and prompt_of(app, key).no_wrap
+
+    drive(steps)
+
+
+def test_up_from_the_headers_reaches_the_screen_tabs_and_left_right_switch_screens(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1", "up", "up")
+        assert app.view == "jobs" and app.header == -1
+        await pilot.press("right")
+        assert app.view == "board" and app.header == -1
+        await pilot.press("left")
+        assert app.view == "jobs" and app.header == -1
+        await pilot.press("left")  # no screen further left
+        assert app.view == "jobs" and app.header == -1
+
+    drive(steps)
+
+
+def test_down_from_the_tabs_goes_to_the_headers_then_the_rows(seeded):
+    async def steps(app, pilot):
+        await pilot.press("2", "up", "up")
+        assert app.view == "board" and app.header == -1
+        await pilot.press("down")
+        assert app.header is not None and app.header >= 0
+        await pilot.press("down")
+        assert app.header is None
+
+    drive(steps)
+
+
+def test_enter_on_the_tabs_does_nothing_and_escape_leaves(seeded):
+    async def steps(app, pilot):
+        await pilot.press("2", "up", "up", "enter")
+        assert app.header == -1 and app.screen.__class__.__name__ != "Suggest"
+        await pilot.press("escape")
+        assert app.header is None
 
     drive(steps)

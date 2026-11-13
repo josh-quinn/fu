@@ -40,7 +40,7 @@ def test_enter_on_a_job_filters_the_board_and_c_clears_it(seeded):
     # Regression: clearing the filter after Enter on a job crashed, because the job
     # detail panel looked the job up through a view-dependent helper.
     async def steps(app, pilot):
-        await pilot.press("2", "down", "enter")
+        await pilot.press("1", "down", "enter")
         await pilot.pause()
         assert app.view == "board" and app.filters == {"job": 1}
         assert app.query_one(DataTable).row_count == 2
@@ -53,7 +53,7 @@ def test_enter_on_a_job_filters_the_board_and_c_clears_it(seeded):
 
 def test_a_job_spread_over_sessions_shows_its_sessions_first(seeded):
     async def steps(app, pilot):
-        await pilot.press("2", "down", "right")
+        await pilot.press("1", "down", "right")
         await pilot.pause()
         job_node = app.nodes[("job", 1)]
         assert job_node.is_expanded
@@ -143,7 +143,7 @@ def test_session_agent_and_folder_are_greyed_out_and_cannot_be_edited(seeded):
 
 def test_job_type_is_a_dropdown_of_the_default_kinds(seeded):
     async def steps(app, pilot):
-        await pilot.press("2", "a")
+        await pilot.press("1", "a")
         form = app.screen
         options = [value for _, value in form.query_one("#edit-kind", Select)._options]
         assert options == list(core.KINDS)
@@ -165,7 +165,7 @@ def test_job_type_is_a_dropdown_of_the_default_kinds(seeded):
 
 def test_a_bad_parent_is_reported_without_crashing_the_app(seeded):
     async def steps(app, pilot):
-        await pilot.press("2", "a", "enter", *"Orphan", "enter", "down", "down", "down")
+        await pilot.press("1", "a", "enter", *"Orphan", "enter", "down", "down", "down")
         await pilot.press("enter", *"no such job", "enter", "ctrl+s")
         await pilot.pause()
         assert not any(j["name"] == "Orphan" for j in core.load_db()["jobs"])
@@ -184,6 +184,98 @@ def test_done_hides_the_task_but_keeps_it_on_the_board(seeded):
         await pilot.press("full_stop")
         await pilot.pause()
         assert app.query_one(DataTable).row_count == before + 1
+
+    drive(steps)
+
+
+def board_order(app) -> list[str]:
+    return [i["summary"] for i in app.visible_items()]
+
+
+def test_the_board_is_the_default_screen_and_keys_are_1_jobs_2_board(seeded):
+    async def steps(app, pilot):
+        assert app.view == "board"
+        await pilot.press("1")
+        assert app.view == "jobs"
+        await pilot.press("2")
+        assert app.view == "board"
+
+    drive(steps)
+
+
+def test_columns_match_the_sortable_columns():
+    from fu.tui import COLUMNS
+
+    assert [c for c, _ in COLUMNS] == list(core.SORT_COLUMNS)
+
+
+def test_up_from_the_first_row_steps_onto_the_headers_and_down_returns(seeded):
+    async def steps(app, pilot):
+        assert app.header is None
+        await pilot.press("down", "up")  # still on the rows
+        assert app.header is None
+        await pilot.press("up")
+        assert app.header is not None
+        await pilot.press("down")
+        assert app.header is None
+
+    drive(steps)
+
+
+def test_left_and_right_move_across_the_headers_and_stop_at_the_last(seeded):
+    async def steps(app, pilot):
+        await pilot.press("up")
+        start = app.header
+        await pilot.press("right")
+        assert app.header == start + 1
+        await pilot.press(*["right"] * 10)
+        assert app.header == 5  # last column, no wrap
+        await pilot.press("left")
+        assert app.header == 4
+
+    drive(steps)
+
+
+def test_left_past_the_first_header_swipes_over_to_jobs(seeded):
+    async def steps(app, pilot):
+        await pilot.press("up", *["left"] * 6)
+        assert app.view == "jobs"
+        assert app.header is None
+
+    drive(steps)
+
+
+def test_enter_on_a_header_sorts_and_again_flips_never_unsorted(seeded):
+    async def steps(app, pilot):
+        assert app.sort == ("status", False)
+        await pilot.press("up", "right", "enter")  # starts on Status; one right is Job
+        assert app.sort == ("job", False)
+        await pilot.press("enter")
+        assert app.sort == ("job", True)
+        await pilot.press("enter")
+        assert app.sort == ("job", False)  # only ever ascending or descending
+        assert app.header is not None  # enter sorted; it did not resume the session
+
+    drive(steps)
+
+
+def test_sort_by_job_orders_by_job_then_status_then_last_worked(seeded):
+    async def steps(app, pilot):
+        await pilot.press("up", "right", "enter")
+        asc = board_order(app)
+        assert asc == ["Write gradient check", "Vectorise softmax", "Check relu_backward"]
+        await pilot.press("enter")
+        assert board_order(app) == asc[::-1]
+
+    drive(steps)
+
+
+def test_escape_on_the_headers_returns_to_the_rows_without_clearing_filters(seeded):
+    async def steps(app, pilot):
+        app.filters = {"text": "softmax"}
+        app.reload()
+        await pilot.press("up", "escape")
+        assert app.header is None and app.filters == {"text": "softmax"}
 
     drive(steps)
 

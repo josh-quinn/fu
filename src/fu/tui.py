@@ -27,6 +27,7 @@ from fu.core import (
     session_label,
     set_parent,
     skey,
+    sort_board,
     sort_items,
     today,
     update,
@@ -34,10 +35,20 @@ from fu.core import (
 
 # -------------------------------------------------------------------- TUI
 
+COLUMNS = [
+    ("id", "ID"),
+    ("status", "Status"),
+    ("job", "Job"),
+    ("summary", "Summary"),
+    ("added", "Added"),
+    ("last_worked", "Last worked"),
+]
+
 HELP = """\
 [b]Views[/]
-  [b]1[/]  Board   every follow-up in one list, filterable
-  [b]2[/]  Jobs    a folder tree: Jobs (job > session > tasks) and Sessions (session > tasks)
+  [b]2[/]  Board   every follow-up in one list (the default screen)
+  [b]1[/]  Jobs    a folder tree: Jobs (job > session > tasks) and Sessions (session > tasks)
+  [b]←[/]  on the Board's first column header: swipe over to Jobs
 
 [b]Moving and resuming[/]
   [b]↑ ↓[/]     move
@@ -55,6 +66,12 @@ HELP = """\
   [b]y[/]  copy the restart command
   [b]x[/]  delete the task (or job: its tasks are kept, unassigned)
   [b]k[/]  Jobs: cycle the selected job's kind (epic > story > bug > spike > idea > btw > guide)
+
+[b]Sorting (Board)[/]
+  [b]↑[/]      from the first row, step up onto the column headers
+  [b]← →[/]    move between headers          [b]↓[/] or [b]esc[/]  back to the rows
+  [b]enter[/]  sort by that header; again to flip ascending / descending (it is always one or the other)
+  Ties fall back to: job > status > last worked > added;  status > last worked > added.
 
 [b]Filtering (Board)[/]
   [b]f[/] or [b]/[/]  filter by text, job, status, agent, session, idle days, recently worked
@@ -354,11 +371,43 @@ def build_app():
             elif node.parent is not None and node.parent is not self.root:
                 self.move_cursor(node.parent)
 
+    class BoardTable(DataTable):
+        """Up from the first row steps onto the column headers; there the arrows pick a
+        header, Enter sorts by it and Down returns to the rows."""
+
+        def action_cursor_up(self) -> None:
+            if self.app.header is not None:
+                return
+            if self.cursor_row == 0 or not self.row_count:
+                self.app.enter_header()
+            else:
+                super().action_cursor_up()
+
+        def action_cursor_down(self) -> None:
+            if self.app.header is not None:
+                self.app.leave_header()
+            else:
+                super().action_cursor_down()
+
+        def action_cursor_left(self) -> None:
+            if self.app.header is not None:
+                self.app.header_move(-1)
+
+        def action_cursor_right(self) -> None:
+            if self.app.header is not None:
+                self.app.header_move(1)
+
+        def action_select_cursor(self) -> None:
+            if self.app.header is not None:
+                self.app.sort_by_header()
+            else:
+                super().action_select_cursor()
+
     class Board(App):
         TITLE = "follow-ups"
         BINDINGS = [
-            Binding("1", "view('board')", "Board"),
-            Binding("2", "view('jobs')", "Jobs"),
+            Binding("1", "view('jobs')", "Jobs"),
+            Binding("2", "view('board')", "Board"),
             Binding("a", "add", "Add"),
             Binding("e", "edit", "Edit"),
             Binding("s", "advance", "Status"),
@@ -402,6 +451,8 @@ def build_app():
             super().__init__()
             self.db: dict = {"items": [], "jobs": []}
             self.view = "board"
+            self.header: int | None = None  # column header under the cursor, None while on the rows
+            self.sort: tuple[str, bool] = ("status", False)  # (column, descending)
             self.show_done = False
             self.filters: dict = {}
             self.expanded: set[tuple] = {("jobs",), ("sessions",)}
@@ -415,7 +466,7 @@ def build_app():
             yield Static(id="bar")
             with ContentSwitcher(initial="board", id="views"):
                 with Horizontal(id="board"):
-                    yield DataTable(id="table", cursor_type="row", zebra_stripes=False)
+                    yield BoardTable(id="table", cursor_type="row", zebra_stripes=False)
                     yield Static(id="board-detail", classes="detail")
                 with Horizontal(id="jobs"):
                     yield FolderTree("root", id="tree")
@@ -423,7 +474,6 @@ def build_app():
             yield Footer()
 
         def on_mount(self) -> None:
-            self.query_one(DataTable).add_columns("ID", "Status", "Job", "Summary", "Added", "Last worked")
             tree = self.query_one(FolderTree)
             tree.show_root = False
             tree.guide_depth = 3
@@ -467,7 +517,9 @@ def build_app():
             return {**self.filters, "all": self.show_done}
 
         def visible_items(self) -> list[dict]:
-            return sort_items([i for i in self.db["items"] if matches(i, self.effective_filters())])
+            return sort_board(
+                self.db, [i for i in self.db["items"] if matches(i, self.effective_filters())], *self.sort
+            )
 
         def table_item(self) -> dict | None:
             table = self.query_one(DataTable)
@@ -495,7 +547,7 @@ def build_app():
             return None
 
         def update_chrome(self) -> None:
-            tabs = [("board", "1 Board"), ("jobs", "2 Jobs")]
+            tabs = [("jobs", "1 Jobs"), ("board", "2 Board")]
             self.query_one("#tabs", Static).update(
                 "   ".join(f"[reverse b] {t} [/]" if v == self.view else f"[dim] {t} [/]" for v, t in tabs)
             )
@@ -506,6 +558,11 @@ def build_app():
                 f"{n['doing']} doing · {n['todo']} todo · {n['done']} done"
                 + ("" if self.show_done or not n["done"] else "  [dim](done hidden: . to show)[/]")
                 + (f"   [b]filter:[/] {chips}  [dim](c clears)[/]" if chips and self.view == "board" else "")
+                + (
+                    "   [b]headers:[/] [dim]← → move · enter sorts · ↓ back to rows · ← at the first swipes to Jobs[/]"
+                    if self.header is not None
+                    else ""
+                )
             )
             self.refresh_bindings()
 
@@ -532,7 +589,12 @@ def build_app():
             keep = keep or (str(self.table_item()["id"]) if self.table_item() else None)
             visible = self.visible_items()
             table = self.query_one(DataTable)
-            table.clear()
+            table.clear(columns=True)
+            for n, (col, label) in enumerate(COLUMNS):
+                mark = (" ▼" if self.sort[1] else " ▲") if self.sort[0] == col else ""
+                style = "reverse bold" if self.header == n else ("bold" if self.sort[0] == col else "")
+                table.add_column(Text(label + mark, style=style), key=col)
+            table.show_cursor = self.header is None
             for i in visible:
                 label, colour = BADGE[i["status"]]
                 job = next((j for j in self.db["jobs"] if j["id"] == i.get("job_id")), None)
@@ -716,10 +778,37 @@ def build_app():
         # ---- actions
         def action_view(self, name: str) -> None:
             self.view = name
+            self.header = None
             self.query_one(ContentSwitcher).current = name
             self.query_one(DataTable if name == "board" else FolderTree).focus()
             self.update_chrome()
             self.show_jobs_detail() if name == "jobs" else self.refresh_table(None)
+
+        # ---- column headers
+        def enter_header(self) -> None:
+            self.header = next((n for n, (c, _) in enumerate(COLUMNS) if c == self.sort[0]), 0)
+            self.refresh_table(None)
+            self.update_chrome()
+
+        def leave_header(self) -> None:
+            self.header = None
+            self.refresh_table(None)
+            self.update_chrome()
+
+        def header_move(self, step: int) -> None:
+            if self.header is None:
+                return
+            if self.header + step < 0:
+                self.action_view("jobs")  # swipe left past the first header onto Jobs
+                return
+            self.header = min(len(COLUMNS) - 1, self.header + step)
+            self.refresh_table(None)
+
+        def sort_by_header(self) -> None:
+            col = COLUMNS[self.header][0]
+            self.sort = (col, not self.sort[1]) if self.sort[0] == col else (col, False)
+            self.refresh_table(None)
+            self.update_chrome()
 
         def action_help(self) -> None:
             self.push_screen(Help())
@@ -895,7 +984,9 @@ def build_app():
             self.push_screen(FilterForm("Filter the board", current), done)
 
         def action_clear_filters(self) -> None:
-            if self.filters:
+            if self.header is not None:
+                self.leave_header()
+            elif self.filters:
                 self.filters = {}
                 self.reload()
 

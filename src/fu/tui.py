@@ -1,18 +1,23 @@
 """The interactive board (Textual). Imported lazily so plain CLI calls stay fast."""
 
 import os
+from datetime import date
 
 from fu.core import (
     AGENTS,
+    DATE_COLUMNS,
     DEFAULT_KIND,
     KIND_GLYPH,
     KINDS,
+    MONTHS,
     STATUSES,
     age,
     check_ext_id,
     clip,
     create_job,
+    date_range,
     filter_jobs,
+    fmt_date,
     heat,
     idle_days,
     job_by_ref,
@@ -23,6 +28,7 @@ from fu.core import (
     load_db,
     matches,
     new_item,
+    range_options,
     remove_job,
     resume_cmd,
     save_db,
@@ -30,6 +36,7 @@ from fu.core import (
     set_parent,
     skey,
     sort_board,
+    suggestions,
     today,
     update,
 )
@@ -44,6 +51,8 @@ JOB_COLUMNS_UI = [
     ("added", "Added"),
     ("last_worked", "Last worked"),
 ]
+LIST_ROWS_TYPING = 6
+LIST_ROWS_EMPTY = 15
 COLUMNS = [
     ("id", "ID"),
     ("status", "Status"),
@@ -80,6 +89,17 @@ HELP = """\
   [b]enter[/]  sort by that header; again to flip ascending / descending (it is always one or the other)
   Ties fall back to: job > status > last worked > added;  status > last worked > added.
 
+[b]Filtering (Jobs)[/]
+  [b]↑[/]      from the first row, step up onto the column headers;  [b]← →[/] move between them
+  [b]enter[/]  on a header: a search box opens under it. Type and the list suggests matches (an empty box lists
+          everything; once you type, 6 show and the rest scroll) while the table filters live. [b]↑ ↓[/] pick a suggestion; [b]enter[/] locks it in
+          (enter on an empty box clears that column's filter); [b]esc[/] puts the old filter back.
+  Type  lists all seven kinds before you type, and searches them as you type.
+  Added / Last worked  open a date picker on today: [b]← →[/] move across Month, Day, Year, Apply, Clear;
+          [b]enter[/] on Month, Day or Year to type and pick; Apply filters to that day. [b]↓[/] to
+          "Select by…" and [b]enter[/] to filter a whole week, month or year.
+  [b]c[/]  clear every filter (the first [b]esc[/] just steps off the headers)
+
 [b]Filtering (Board)[/]
   [b]f[/] or [b]/[/]  filter by text, job, status, agent, session, idle days, recently worked
   [b]c[/] or [b]esc[/]  clear all filters
@@ -109,6 +129,7 @@ def build_app():
         Header,
         Input,
         Label,
+        OptionList,
         Select,
         Static,
     )
@@ -353,6 +374,213 @@ def build_app():
                     return f"{k} must be a whole number of days"
             return None
 
+    def size_list(opts, typed: str) -> None:
+        """An empty search shows every option (up to what fits on screen); once you type, six rows show
+        and the rest scroll."""
+        opts.styles.max_height = LIST_ROWS_TYPING if typed.strip() else LIST_ROWS_EMPTY
+
+    class Suggest(ModalScreen["str | None"]):
+        """A search box with a live suggestion list (6 rows, scrolls). Typing filters the list and,
+        through `live`, the board behind it. Up/Down pick a suggestion; Enter locks in the picked
+        suggestion, or what was typed when none is picked. Esc cancels."""
+
+        BINDINGS = [
+            Binding("escape", "cancel", "Cancel"),
+            Binding("up", "move(-1)", show=False),
+            Binding("down", "move(1)", show=False),
+        ]
+
+        def __init__(self, title: str, options, initial: str, live, x: int) -> None:
+            super().__init__()
+            self.title_text, self.options, self.initial, self.live, self.x = title, options, initial, live, x
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="popup"):
+                yield Label(f"[b]{self.title_text}[/] [dim]search · ↑↓ pick · enter locks · esc[/]")
+                yield Input(value=self.initial, id="q")
+                yield OptionList(id="opts")
+
+        def on_mount(self) -> None:
+            self.styles.align = ("left", "top")
+            self.query_one(".popup").styles.margin = (4, 0, 0, self.x)
+            self.query_one(OptionList).can_focus = False
+            self.fill(self.initial)
+            self.query_one(Input).focus()
+
+        def fill(self, text: str) -> None:
+            opts = self.query_one(OptionList)
+            opts.clear_options()
+            opts.add_options(self.options(text))
+            opts.highlighted = None
+            size_list(opts, text)
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            event.stop()
+            self.fill(event.value)
+            self.live(event.value.strip())
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            event.stop()
+            opts = self.query_one(OptionList)
+            if opts.highlighted is not None:
+                self.dismiss(str(opts.get_option_at_index(opts.highlighted).prompt))
+            else:
+                self.dismiss(event.value.strip())
+
+        def action_move(self, step: int) -> None:
+            opts = self.query_one(OptionList)
+            opts.action_cursor_down() if step > 0 else opts.action_cursor_up()
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
+    class DatePick(ModalScreen["dict | None"]):
+        """Month / Day / Year segments (←→ move, enter edits one with type-to-filter), Apply, Clear,
+        and 'Select by…' for a whole week, month or year. Returns a filter dict, {"clear": True} or None."""
+
+        BINDINGS = [
+            Binding("escape", "back", "Back"),
+            Binding("left", "step(-1)", show=False),
+            Binding("right", "step(1)", show=False),
+            Binding("up", "vert(-1)", show=False),
+            Binding("down", "vert(1)", show=False),
+            Binding("enter", "choose", show=False),
+        ]
+        RING = ("month", "day", "year", "apply", "clear")
+        AUTO_FOCUS = ""  # the picker's own bindings need the keys; the hidden search box must not grab them
+
+        def __init__(self, title: str, start: date, x: int) -> None:
+            super().__init__()
+            self.title_text, self.x = title, x
+            self.y, self.m, self.d = start.year, start.month, start.day
+            self.row, self.pos = 0, 0
+            self.sub: str | None = None  # what the open list is choosing
+            self.choices: list = []  # (label, value) behind the open list
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="popup"):
+                yield Label(f"[b]{self.title_text}[/] [dim]←→ move · enter select · esc[/]")
+                yield Static(id="dateline")
+                yield Static(id="byline")
+                yield Input(id="q")
+                yield OptionList(id="opts")
+
+        def on_mount(self) -> None:
+            self.styles.align = ("left", "top")
+            self.query_one(".popup").styles.margin = (4, 0, 0, self.x)
+            self.query_one(OptionList).can_focus = False
+            self.hide_list()
+            self.draw()
+
+        def day_count(self) -> int:
+            return (date(self.y + (self.m == 12), self.m % 12 + 1, 1) - date(self.y, self.m, 1)).days
+
+        def draw(self) -> None:
+            def seg(name: str, text: str) -> str:
+                on = self.row == 0 and self.RING[self.pos] == name
+                return f"[reverse b] {text} [/]" if on else f" {text} "
+
+            line = (
+                seg("month", MONTHS[self.m - 1])
+                + seg("day", str(self.d))
+                + seg("year", str(self.y))
+                + "   "
+                + seg("apply", "Apply")
+                + seg("clear", "Clear")
+            )
+            self.query_one("#dateline", Static).update(line)
+            by = "Select by…  [dim]week · month · year[/]"
+            self.query_one("#byline", Static).update(f"[reverse b] {by} [/]" if self.row == 1 else f" {by} ")
+
+        def hide_list(self) -> None:
+            self.sub = None
+            self.query_one("#q").display = False
+            self.query_one("#opts").display = False
+            self.set_focus(None)
+
+        def open_list(self, sub: str, choices: list) -> None:
+            self.sub, self.choices = sub, choices
+            q = self.query_one("#q", Input)
+            q.value = ""
+            q.display = True
+            self.query_one("#opts").display = True
+            self.fill("")
+            q.focus()
+
+        def fill(self, text: str) -> None:
+            opts = self.query_one(OptionList)
+            opts.clear_options()
+            low = text.strip().lower()
+            hits = [c for c in self.choices if low in c[0].lower()]
+            self.shown = sorted(hits, key=lambda c: not c[0].lower().startswith(low))
+            opts.add_options([c[0] for c in self.shown])
+            opts.highlighted = None
+            size_list(opts, text)
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            event.stop()
+            if self.sub:
+                self.fill(event.value)
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            event.stop()
+            if not (self.sub and self.shown):
+                return
+            opts = self.query_one(OptionList)
+            label, value = self.shown[opts.highlighted if opts.highlighted is not None else 0]
+            sub = self.sub
+            self.hide_list()
+            if sub == "by":
+                self.open_list(
+                    f"range:{value}", [(lab, (lo, hi)) for lab, lo, hi in range_options(value, date.today())]
+                )
+            elif sub.startswith("range:"):
+                self.dismiss({"from": value[0], "to": value[1], "label": label})
+            else:
+                setattr(self, {"month": "m", "day": "d", "year": "y"}[sub], value)
+                self.d = min(self.d, self.day_count())
+                self.draw()
+
+        def action_step(self, step: int) -> None:
+            if self.sub or self.row:
+                return
+            self.pos = max(0, min(len(self.RING) - 1, self.pos + step))
+            self.draw()
+
+        def action_vert(self, step: int) -> None:
+            if self.sub:
+                opts = self.query_one(OptionList)
+                opts.action_cursor_down() if step > 0 else opts.action_cursor_up()
+                return
+            self.row = max(0, min(1, self.row + step))
+            self.draw()
+
+        def action_choose(self) -> None:
+            if self.sub:
+                return
+            if self.row == 1:
+                self.open_list("by", [(u.capitalize(), u) for u in ("week", "month", "year")])
+                return
+            name = self.RING[self.pos]
+            if name == "apply":
+                lo, hi = date_range("day", date(self.y, self.m, self.d))
+                self.dismiss({"from": lo, "to": hi, "label": fmt_date(date(self.y, self.m, self.d))})
+            elif name == "clear":
+                self.dismiss({"clear": True})
+            elif name == "month":
+                self.open_list("month", [(m, n + 1) for n, m in enumerate(MONTHS)])
+            elif name == "day":
+                self.open_list("day", [(str(n), n) for n in range(1, self.day_count() + 1)])
+            else:
+                first = date.today().year - 5
+                self.open_list("year", [(str(n), n) for n in range(first, date.today().year + 2)])
+
+        def action_back(self) -> None:
+            if self.sub:
+                self.hide_list()
+            else:
+                self.dismiss(None)
+
     class HeaderTable(DataTable):
         """Up from the first row steps onto the column headers; there the arrows pick a
         header, Enter acts on it (sort on the Board, filter on Jobs) and Down returns to the rows."""
@@ -415,7 +643,7 @@ def build_app():
         #table, #jobs-table { width: 5fr; height: 1fr; background: $background; }
         #jobs-table { width: 7fr; }
         .detail { width: 3fr; height: 1fr; margin-left: 2; padding: 1 2; border-left: solid $primary 40%; }
-        ModalScreen { align: center middle; }
+        ModalScreen { align: center middle; background: $background 40%; }
         .dialog { width: 76; height: auto; max-height: 90%; padding: 1 2; background: $surface;
                   border: round $primary; }
         .dialog.wide { width: 100; }
@@ -423,6 +651,9 @@ def build_app():
         .dialog Input { height: 1; border: none; padding: 0 1; background: $boost; }
         .dialog Select { height: 1; }
         .dialog Select > SelectCurrent { border: none; height: 1; padding: 0 1; background: $boost; }
+        .popup { width: 60; height: auto; max-height: 22; padding: 0 1; background: $surface; border: round $primary; }
+        .popup Input { height: 1; border: none; padding: 0 1; background: $boost; }
+        .popup OptionList { height: auto; border: none; padding: 0; background: $surface; }
         .row { height: 1; padding: 0 1; background: $boost; }
         .row:focus { background: $primary 35%; text-style: bold; }
         .row.ro { background: transparent; color: $text-disabled; }
@@ -526,6 +757,11 @@ def build_app():
                 f"{n['doing']} doing · {n['todo']} todo · {n['done']} done"
                 + ("" if self.show_done or not n["done"] else "  [dim](done hidden: . to show)[/]")
                 + (f"   [b]filter:[/] {chips}  [dim](c clears)[/]" if chips and self.view == "board" else "")
+                + (
+                    f"   [b]filter:[/] {self.job_filter_chips()}  [dim](c clears)[/]"
+                    if self.jfilters and self.view == "jobs"
+                    else ""
+                )
                 + (
                     "   [b]headers:[/] [dim]← → move · enter sorts · ↓ back to rows · ← at the first swipes to Jobs[/]"
                     if self.header is not None and self.view == "board"
@@ -737,6 +973,61 @@ def build_app():
         def header_enter(self) -> None:
             if self.view == "board":
                 self.sort_by_header()
+            else:
+                self.filter_by_header()
+
+        def header_x(self, n: int) -> int:
+            """Where header n starts, so a popup can sit under it."""
+            table = self.query_one("#jobs-table", DataTable)
+            try:
+                return 2 + sum(c.get_render_width(table) for c in list(table.columns.values())[:n])
+            except Exception:  # noqa: BLE001 - placement is cosmetic; fall back to the left edge
+                return 2
+
+        def set_jfilter(self, col: str, value: dict | None) -> None:
+            if value:
+                self.jfilters[col] = value
+            else:
+                self.jfilters.pop(col, None)
+            self.refresh_jobs()
+            self.update_chrome()
+
+        def filter_by_header(self) -> None:
+            col, label = JOB_COLUMNS_UI[self.header]
+            saved = self.jfilters.get(col)
+            x = self.header_x(self.header)
+            if col in DATE_COLUMNS:
+                start = date.fromisoformat(saved["from"]) if saved and saved["from"] == saved["to"] else date.today()
+
+                def picked(v: dict | None) -> None:
+                    if v is not None:
+                        self.set_jfilter(col, None if v.get("clear") else v)
+
+                self.push_screen(DatePick(label, start, x), picked)
+                return
+            others = {k: v for k, v in self.jfilters.items() if k != col}
+            rows = filter_jobs(job_rows(self.db), others)
+
+            def picked_text(v: str | None) -> None:
+                self.set_jfilter(col, saved if v is None else ({"text": v} if v else None))
+
+            self.push_screen(
+                Suggest(
+                    label,
+                    lambda typed: suggestions(rows, col, typed),
+                    saved["text"] if saved and "text" in saved else "",
+                    lambda typed: self.set_jfilter(col, {"text": typed} if typed else None),
+                    x,
+                ),
+                picked_text,
+            )
+
+        def job_filter_chips(self) -> str:
+            labels = dict(JOB_COLUMNS_UI)
+            return " · ".join(
+                f"{labels[c]}: " + (f"“{escape(f['text'])}”" if "text" in f else escape(f["label"]))
+                for c, f in self.jfilters.items()
+            )
 
         def sort_by_header(self) -> None:
             col = COLUMNS[self.header][0]

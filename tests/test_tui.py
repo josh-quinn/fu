@@ -1,6 +1,7 @@
 """Drive the real Textual app headlessly. Each test pins behaviour that once broke."""
 
 import asyncio
+from datetime import date
 
 import pytest
 
@@ -108,6 +109,214 @@ def test_enter_on_a_job_with_no_session_just_says_so(seeded):
         await select_job(app, pilot, "Cheatsheet")
         await pilot.press("enter")
         assert app.screen.__class__.__name__ != "Confirm"
+
+    drive(steps)
+
+
+async def open_header(app, pilot, n: int) -> None:
+    """Jobs screen, step onto the headers, move to header n and press Enter."""
+    # the cursor can sit on any row, so press Up until it has stepped onto the headers (extra Ups do nothing there)
+    await pilot.press("1", *["up"] * 15, *["right"] * n, "enter")
+    await pilot.pause()
+
+
+def test_enter_on_a_text_header_opens_a_live_filter_that_enter_locks(seeded):
+    async def steps(app, pilot):
+        await open_header(app, pilot, 3)  # Title
+        assert app.screen.__class__.__name__ == "Suggest"
+        await pilot.press(*"relu")
+        await pilot.pause()
+        assert job_titles(app) == ["ReLU derivative bug"]  # the table filters while you type
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ != "Suggest"
+        assert app.jfilters == {"title": {"text": "relu"}}
+        assert "●" in str(jobs_table(app).columns["title"].label)
+
+    drive(steps)
+
+
+def test_up_and_down_pick_a_suggestion_and_enter_locks_that_one(seeded):
+    async def steps(app, pilot):
+        await open_header(app, pilot, 3)
+        await pilot.press("down", "down", "enter")  # two suggestions down: alphabetical, so the second
+        await pilot.pause()
+        assert app.jfilters == {"title": {"text": "ReLU derivative bug"}}
+
+    drive(steps)
+
+
+def test_escape_puts_the_previous_filter_back(seeded):
+    async def steps(app, pilot):
+        await open_header(app, pilot, 3)
+        await pilot.press(*"backprop", "enter")
+        await pilot.press("enter")  # still on the Title header: reopen it
+        await pilot.pause()
+        await pilot.press(*"zzz")
+        await pilot.pause()
+        assert job_titles(app) == []  # live
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.jfilters == {"title": {"text": "backprop"}}
+        assert job_titles(app) == ["Backprop from scratch"]
+
+    drive(steps)
+
+
+def test_locking_an_empty_box_clears_that_filter(seeded):
+    async def steps(app, pilot):
+        app.jfilters = {"title": {"text": "relu"}}
+        app.reload()
+        await open_header(app, pilot, 3)
+        await pilot.press(*["backspace"] * 4, "enter")
+        await pilot.pause()
+        assert app.jfilters == {} and len(job_titles(app)) == 2
+
+    drive(steps)
+
+
+def test_type_header_offers_the_default_kinds_and_searches_them(seeded):
+    async def steps(app, pilot):
+        from textual.widgets import OptionList
+
+        await open_header(app, pilot, 1)  # Type
+        opts = app.screen.query_one(OptionList)
+        assert opts.option_count == len(core.KINDS)  # the whole default list before anything is typed
+        assert opts.size.height == len(core.KINDS)  # ...and every one of them is visible, none hidden by a scrollbar
+        await pilot.press(*"gu")
+        assert [str(opts.get_option_at_index(n).prompt) for n in range(opts.option_count)] == ["guide"]
+
+    drive(steps)
+
+
+def test_an_empty_search_lists_everything_and_typing_caps_the_list_at_six_rows(seeded):
+    async def steps(app, pilot):
+        from textual.widgets import OptionList
+
+        db = core.load_db()
+        for n in range(8):
+            core.create_job(db, f"Job number {n}")
+        core.save_db(db)
+        app.reload()
+        await open_header(app, pilot, 3)  # Title: 10 jobs
+        opts = app.screen.query_one(OptionList)
+        assert opts.option_count == 10 and opts.size.height == 10  # empty: all shown
+        await pilot.press(*"job")
+        await pilot.pause()
+        assert opts.option_count == 8 and opts.size.height == 6  # typing: six rows, the rest scroll
+        await pilot.press(*["backspace"] * 3)
+        await pilot.pause()
+        assert opts.size.height == 10  # emptied again: everything is back
+
+    drive(steps)
+
+
+def test_suggestions_only_come_from_rows_the_other_filters_leave(seeded):
+    async def steps(app, pilot):
+        from textual.widgets import OptionList
+
+        app.jfilters = {"kind": {"text": "bug"}}
+        app.reload()
+        await open_header(app, pilot, 3)
+        opts = app.screen.query_one(OptionList)
+        assert opts.option_count == 1  # only the bug is left to suggest
+
+    drive(steps)
+
+
+def test_c_clears_the_jobs_filters_and_escape_first_leaves_the_headers(seeded):
+    async def steps(app, pilot):
+        app.jfilters = {"title": {"text": "relu"}}
+        app.reload()
+        await pilot.press("1", "up", "escape")
+        assert app.header is None and app.jfilters  # the first escape only steps off the headers
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.jfilters == {} and len(job_titles(app)) == 2
+
+    drive(steps)
+
+
+def test_date_header_opens_a_picker_on_todays_date_and_apply_filters_that_day(seeded):
+    async def steps(app, pilot):
+        db = core.load_db()
+        db["jobs"][0]["created"] = "2026-01-15"
+        core.save_db(db)
+        app.reload()
+        await open_header(app, pilot, 4)  # Added
+        picker = app.screen
+        assert picker.__class__.__name__ == "DatePick"
+        assert (picker.y, picker.m, picker.d) == (date.today().year, date.today().month, date.today().day)
+        await pilot.press("right", "right", "right", "enter")  # month, day, year, then Apply
+        await pilot.pause()
+        assert app.jfilters["added"]["from"] == app.jfilters["added"]["to"] == date.today().isoformat()
+        assert job_titles(app) == ["ReLU derivative bug"]  # the epic was added in January
+
+    drive(steps)
+
+
+def test_picking_a_month_by_typing_then_apply_filters_that_day(seeded):
+    # Regression: the month and year segment editors shared a name with the 'Select by' ranges,
+    # so choosing a month crashed trying to read it as a (from, to) pair.
+    async def steps(app, pilot):
+        db = core.load_db()
+        db["jobs"][0]["created"] = "2026-01-15"
+        core.save_db(db)
+        app.reload()
+        await open_header(app, pilot, 4)
+        await pilot.press("enter", *"jan", "enter")  # month segment: type and take the first match
+        assert app.screen.m == 1
+        await pilot.press("right", "enter", "1", "5", "enter")  # day segment: 15
+        assert app.screen.d == 15
+        await pilot.press("right", "right", "enter")  # year, then Apply
+        await pilot.pause()
+        assert app.jfilters["added"]["from"] == "2026-01-15"
+        assert job_titles(app) == ["Backprop from scratch"]
+
+    drive(steps)
+
+
+def test_changing_the_month_keeps_the_day_inside_it(seeded):
+    async def steps(app, pilot):
+        await open_header(app, pilot, 4)
+        app.screen.d = 31
+        await pilot.press("enter", *"feb", "enter")
+        assert (app.screen.m, app.screen.d) == (2, 28)  # 2026 is not a leap year
+
+    drive(steps)
+
+
+def test_select_by_week_offers_this_week_first_and_filters_the_range(seeded):
+    async def steps(app, pilot):
+        db = core.load_db()
+        db["jobs"][0]["created"] = "2026-01-15"
+        core.save_db(db)
+        app.reload()
+        await open_header(app, pilot, 4)
+        await pilot.press("down", "enter", "enter")  # row 'Select by…', pick Week (first match)
+        assert app.screen.sub == "range:week"
+        await pilot.press("enter")  # This week
+        await pilot.pause()
+        f = app.jfilters["added"]
+        assert f["label"] == "This week"
+        assert f["from"] <= date.today().isoformat() <= f["to"]
+        assert job_titles(app) == ["ReLU derivative bug"]
+
+    drive(steps)
+
+
+def test_picker_clear_removes_the_filter_and_escape_leaves_it_alone(seeded):
+    async def steps(app, pilot):
+        app.jfilters = {"added": {"from": "2026-01-01", "to": "2026-01-31", "label": "Jan 2026"}}
+        app.reload()
+        await open_header(app, pilot, 4)
+        await pilot.press("escape")
+        assert app.jfilters["added"]["label"] == "Jan 2026"
+        await pilot.press("enter")  # still on the Added header: reopen it
+        await pilot.pause()
+        await pilot.press("right", "right", "right", "right", "enter")  # to Clear
+        await pilot.pause()
+        assert app.jfilters == {}
 
     drive(steps)
 

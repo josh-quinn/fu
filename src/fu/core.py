@@ -275,6 +275,40 @@ def sort_items(items: list[dict]) -> list[dict]:
     return sorted(items, key=lambda i: (STATUSES.index(i["status"]), i["last_worked"]))
 
 
+SORT_COLUMNS = ("id", "status", "job", "summary", "added", "last_worked")
+
+
+def sort_board(db: dict, items: list[dict], column: str = "status", descending: bool = False) -> list[dict]:
+    """Order the board by one column. Ties fall back as the user asked:
+    job -> status, last worked, added; status -> last worked, added (and so on
+    for the other columns). Always ascending or descending, never unsorted.
+    """
+    names = {j["id"]: j["name"].lower() for j in db["jobs"]}
+
+    def key(i: dict) -> tuple:
+        status = STATUSES.index(i["status"])
+        # the id is the last tie-break, so equal rows keep a fixed order (and descending is an exact reverse)
+        return (
+            *{
+                "id": (i["id"],),
+                "status": (status, i["last_worked"], i["added"]),
+                "job": (
+                    i.get("job_id") not in names,
+                    names.get(i.get("job_id"), ""),
+                    status,
+                    i["last_worked"],
+                    i["added"],
+                ),
+                "summary": (i["summary"].lower(), status, i["last_worked"], i["added"]),
+                "added": (i["added"], status, i["last_worked"]),
+                "last_worked": (i["last_worked"], status, i["added"]),
+            }[column],
+            i["id"],
+        )
+
+    return sorted(items, key=key, reverse=descending)
+
+
 def jobs_ordered(db: dict) -> list[dict]:
     return sorted(db["jobs"], key=lambda j: (KINDS.index(j["kind"]), j["name"].lower()))
 

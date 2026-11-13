@@ -185,6 +185,57 @@ class TestFilters:
         ]
 
 
+class TestBoardSort:
+    @staticmethod
+    def board():
+        db = core.load_db()
+        core.create_job(db, "Alpha")
+        core.create_job(db, "Beta")
+        core.new_item(db, "a-done", status="done", job="Alpha", last_worked="2026-11-01", added="2026-10-01")
+        core.new_item(db, "a-todo-new", job="Alpha", last_worked="2026-11-05", added="2026-10-02")
+        core.new_item(db, "a-todo-old", job="Alpha", last_worked="2026-11-02", added="2026-10-03")
+        core.new_item(db, "b-doing", status="doing", job="Beta", last_worked="2026-11-09", added="2026-10-04")
+        core.new_item(db, "loose", last_worked="2026-11-03", added="2026-10-05")
+        return db
+
+    def names(self, db, column, descending=False):
+        return [i["summary"] for i in core.sort_board(db, db["items"], column, descending)]
+
+    def test_status_then_last_worked_then_added(self):
+        db = self.board()
+        # todo (oldest last-worked first), then doing, then done
+        assert self.names(db, "status") == ["a-todo-old", "loose", "a-todo-new", "b-doing", "a-done"]
+
+    def test_job_then_status_then_last_worked_then_added(self):
+        db = self.board()
+        # Alpha's tasks by status (todo before done) then last worked, then Beta, then no job last
+        assert self.names(db, "job") == ["a-todo-old", "a-todo-new", "a-done", "b-doing", "loose"]
+
+    def test_descending_is_the_exact_reverse(self):
+        db = self.board()
+        for column in core.SORT_COLUMNS:
+            assert self.names(db, column, True) == self.names(db, column)[::-1]
+
+    def test_last_worked_added_and_id_columns(self):
+        db = self.board()
+        assert self.names(db, "last_worked")[0] == "a-done"
+        assert self.names(db, "added")[0] == "a-done"
+        assert self.names(db, "id") == ["a-done", "a-todo-new", "a-todo-old", "b-doing", "loose"]
+
+    def test_rows_that_tie_on_everything_keep_a_fixed_order_by_id(self):
+        db = core.load_db()
+        for name in ("first", "second", "third"):
+            core.new_item(db, name)
+        assert self.names(db, "status") == ["first", "second", "third"]
+        assert self.names(db, "status", True) == ["third", "second", "first"]
+
+    def test_summary_column_ignores_case(self):
+        db = core.load_db()
+        for name in ("beta", "Alpha", "gamma"):
+            core.new_item(db, name)
+        assert self.names(db, "summary") == ["Alpha", "beta", "gamma"]
+
+
 class TestSessions:
     def test_claude_session_comes_from_the_environment(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-1")

@@ -162,6 +162,20 @@ def set_parent(db: dict, job: dict, ref) -> None:
     job["parent_id"] = parent["id"]
 
 
+def remove_job(db: dict, job: dict) -> int:
+    """Delete a job. Its tasks are kept, unassigned; its child jobs move up to its parent."""
+    n = 0
+    for item in db["items"]:
+        if item.get("job_id") == job["id"]:
+            item["job_id"] = None
+            n += 1
+    for child in db["jobs"]:
+        if child["parent_id"] == job["id"]:
+            child["parent_id"] = job["parent_id"]
+    db["jobs"] = [j for j in db["jobs"] if j is not job]
+    return n
+
+
 def create_job(db: dict, name: str, kind: str | None = None, ext_id: str = "", parent=None, desc: str = "") -> dict:
     ext_id = ext_id.strip()
     _check_ext_id(db, ext_id)

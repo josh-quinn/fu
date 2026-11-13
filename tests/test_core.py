@@ -117,6 +117,17 @@ class TestJobHierarchy:
         core.set_parent(db, story, "none")
         assert story["parent_id"] is None
 
+    def test_deleting_a_job_keeps_its_tasks_and_lifts_its_children(self):
+        db = core.load_db()
+        epic = core.create_job(db, "Backprop", "epic")
+        story = core.create_job(db, "Gradient check", parent="Backprop")
+        bug = core.create_job(db, "ReLU bug", "bug", parent="Gradient check")
+        task = core.new_item(db, "Print both grads", job="Gradient check")
+        assert core.remove_job(db, story) == 1
+        assert task["job_id"] is None and task in db["items"]
+        assert bug["parent_id"] == epic["id"]
+        assert story not in db["jobs"]
+
     def test_unknown_parent_is_an_error(self):
         db = core.load_db()
         with pytest.raises(SystemExit):

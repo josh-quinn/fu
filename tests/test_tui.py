@@ -85,16 +85,16 @@ def test_jobs_headers_move_and_right_past_the_last_swipes_to_the_board(seeded):
     drive(steps)
 
 
-def test_alt_r_on_a_job_with_sessions_offers_restart_or_a_new_session(seeded):
+def test_shift_r_on_a_job_with_sessions_offers_restart_or_a_new_session(seeded):
     async def steps(app, pilot):
         await pilot.press("1")
         await select_job(app, pilot, "Backprop from scratch")  # the epic with two sessions
-        await pilot.press("alt+r")
+        await pilot.press("R")
         assert app.screen.__class__.__name__ == "SessionChoice"
         assert len(app.screen.sessions) == 2
         await pilot.press("escape")
         assert app.pick is None and app.view == "jobs"
-        await pilot.press("alt+r")
+        await pilot.press("R")
         await pilot.pause()
         first = app.screen.sessions[0][0]
         await pilot.press("enter")  # Restart is the default, on the first listed session
@@ -107,7 +107,7 @@ def test_restart_can_target_another_session_with_up_and_down(seeded):
     async def steps(app, pilot):
         await pilot.press("1")
         await select_job(app, pilot, "Backprop from scratch")
-        await pilot.press("alt+r")
+        await pilot.press("R")
         await pilot.pause()
         second = app.screen.sessions[1][0]
         await pilot.press("down", "enter")
@@ -120,7 +120,7 @@ def test_right_picks_new_session_and_enter_opens_the_start_dialog(seeded):
     async def steps(app, pilot):
         await pilot.press("1")
         await select_job(app, pilot, "Backprop from scratch")
-        await pilot.press("alt+r")
+        await pilot.press("R")
         await pilot.pause()
         await pilot.press("right", "enter")
         await pilot.pause()
@@ -129,7 +129,7 @@ def test_right_picks_new_session_and_enter_opens_the_start_dialog(seeded):
     drive(steps)
 
 
-def test_alt_r_on_a_job_without_sessions_goes_straight_to_the_start_dialog(seeded):
+def test_shift_r_on_a_job_without_sessions_goes_straight_to_the_start_dialog(seeded):
     async def steps(app, pilot):
         db = core.load_db()
         core.create_job(db, "Cheatsheet", "btw")
@@ -137,7 +137,7 @@ def test_alt_r_on_a_job_without_sessions_goes_straight_to_the_start_dialog(seede
         app.reload()
         await pilot.press("1")
         await select_job(app, pilot, "Cheatsheet")
-        await pilot.press("alt+r")
+        await pilot.press("R")
         await pilot.pause()
         assert app.screen.__class__.__name__ == "NewSession"
 
@@ -1073,19 +1073,24 @@ def test_enter_on_a_date_column_opens_the_picker_on_that_rows_date(epic_board):
     drive(steps)
 
 
-def test_plain_letters_type_in_column_mode_but_the_modifier_runs_shortcuts(epic_board):
+async def enter_column_mode(app, pilot):
+    await to_row(app, pilot, "Backprop")
+    await pilot.press("enter")
+    await pilot.pause()
+    assert app.col == 3
+
+
+def test_plain_letters_type_in_column_mode_but_ctrl_runs_shortcuts(epic_board):
     async def steps(app, pilot):
-        await to_row(app, pilot, "Backprop")
-        await pilot.press("enter")
+        await enter_column_mode(app, pilot)
+        await pilot.press("a")  # a plain a is typed into the search, not the Add shortcut
         await pilot.pause()
-        await pilot.press("2")  # a plain 2 is typed into the search, not the Board shortcut
-        await pilot.pause()
-        assert app.view == "jobs" and app.screen.__class__.__name__ == "Suggest"
+        assert app.screen.__class__.__name__ == "Suggest"
         await pilot.press("escape")
         await pilot.pause()
-        await pilot.press("super+2")
+        await pilot.press("ctrl+a")
         await pilot.pause()
-        assert app.view == "board" and app.col is None
+        assert app.screen.__class__.__name__ == "JobForm"
 
     drive(steps)
 
@@ -1097,36 +1102,57 @@ def test_the_shortcut_modifier_comes_from_the_config(epic_board, tmp_path, monke
     monkeypatch.setattr(core, "CONFIG_FILE", cfg)  # CONFIG_FILE is fixed at import, so point it at the sandbox
 
     async def steps(app, pilot):
-        await to_row(app, pilot, "Backprop")
-        await pilot.press("enter")
+        await enter_column_mode(app, pilot)
+        await pilot.press("ctrl+a")  # no longer bound
         await pilot.pause()
-        await pilot.press("alt+2")
-        assert app.view == "board"
+        assert app.screen.__class__.__name__ != "JobForm"
+        await pilot.press("alt+a")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "JobForm"
 
     drive(steps)
 
 
-def test_switching_screens_leaves_column_mode(epic_board):
+def test_escape_then_a_digit_switches_screen_out_of_column_mode(epic_board):
     async def steps(app, pilot):
-        await to_row(app, pilot, "Backprop")
-        await pilot.press("enter")
-        await pilot.pause()
-        assert app.col == 3
-        await pilot.press("super+2")
-        assert app.col is None
+        await enter_column_mode(app, pilot)
+        await pilot.press("escape", "2")
+        assert app.col is None and app.view == "board"
 
     drive(steps)
 
 
-def test_alt_full_stop_hides_and_shows_the_panel_and_right_reopens_it(epic_board):
+def test_shift_r_and_shift_full_stop_are_shortcuts_not_search_text_in_column_mode(epic_board):
+    async def steps(app, pilot):
+        await enter_column_mode(app, pilot)
+        await pilot.press("greater_than_sign")
+        assert not panel(app).display and app.screen.__class__.__name__ != "Suggest"
+        await pilot.press("R")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ in ("SessionChoice", "NewSession")
+
+    drive(steps)
+
+
+def test_f1_opens_help_even_in_column_mode(epic_board):
+    async def steps(app, pilot):
+        await enter_column_mode(app, pilot)
+        await pilot.press("f1")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "Help"
+
+    drive(steps)
+
+
+def test_shift_full_stop_hides_and_shows_the_panel_and_right_reopens_it(epic_board):
     async def steps(app, pilot):
         await to_row(app, pilot, "Backprop")
         assert panel(app).display
-        await pilot.press("alt+full_stop")
+        await pilot.press("greater_than_sign")
         assert not panel(app).display and not app.query_one("#board-detail").display
-        await pilot.press("alt+full_stop")
+        await pilot.press("greater_than_sign")
         assert panel(app).display
-        await pilot.press("alt+full_stop", "right")  # entering the panel shows it again
+        await pilot.press("greater_than_sign", "right")  # entering the panel shows it again
         await pilot.pause()
         assert panel(app).display and app.in_panel
 
@@ -1137,7 +1163,7 @@ def test_hiding_the_panel_while_inside_it_returns_to_the_rows(epic_board):
     async def steps(app, pilot):
         await open_panel(app, pilot)
         assert app.in_panel
-        await pilot.press("alt+full_stop")
+        await pilot.press("greater_than_sign")
         assert not app.in_panel and app.focused.id == "jobs-table"
 
     drive(steps)
@@ -1145,7 +1171,7 @@ def test_hiding_the_panel_while_inside_it_returns_to_the_rows(epic_board):
 
 async def open_new_session(app, pilot):
     await to_row(app, pilot, "Backprop")
-    await pilot.press("alt+r")
+    await pilot.press("R")
     await pilot.pause()
     await pilot.press("right", "enter")
     await pilot.pause()

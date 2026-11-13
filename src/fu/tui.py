@@ -73,13 +73,13 @@ HELP = """\
   [b]↑[/]  from the first row, step onto the column headers; [b]↑[/] again reaches the Jobs / Board tabs,
      where [b]← →[/] switch screen and [b]↓[/] comes back to the headers
   [b]←[/]  on the Board's first header: swipe over to Jobs;  [b]→[/] on the Jobs table's last header: to the Board
-  [b]alt+.[/]  show or hide the summary / detail panel
+  [b]shift+.[/] (>)  show or hide the summary / detail panel
 
 [b]Moving and starting sessions[/]
   [b]↑ ↓[/]     move through the rows
   [b]enter[/]   Board: resume the highlighted session (runs its restart command and exits)
           Jobs: pick a whole column to search (see Column mode)
-  [b]alt+r[/]   on a job (or inside its summary panel): sessions exist, so choose [b]Restart[/] or [b]New Session[/]
+  [b]shift+r[/] (R)  on a job (or inside its summary panel): sessions exist, so choose [b]Restart[/] or [b]New Session[/]
           ([b]← →[/] choose, [b]↑ ↓[/] pick the session to restart). No sessions: go straight to New Session.
           New Session asks for the agent, which context to hand over (why, notes, artifacts, parent, child
           jobs, earlier sessions), a first prompt (type [b]/[/] for skills) and the folder (type a path for
@@ -116,9 +116,10 @@ HELP = """\
   [b]enter[/]  searches that column starting from the highlighted row's own value, so enter, enter shows every
           job with the same parent (or type, or title). Typing instead starts a fresh search.
   [b]esc[/]    brings back every result; a second esc leaves column mode.
-  While in column mode plain letters type, so use the modifier for shortcuts: [b]cmd+a[/], [b]cmd+e[/], [b]cmd+2[/]
-  and so on. The modifier is [b]modifier[/] under \\[keys] in ~/.config/jq-tools/follow-ups/config.toml
-  ("super" is Cmd and needs a terminal that reports it; "alt" or "ctrl" work anywhere). [b].[/] stays plain.
+  While in column mode plain letters type, so use Ctrl for shortcuts: [b]ctrl+a[/] add, [b]ctrl+e[/] edit,
+  [b]ctrl+d[/] done, [b]ctrl+y[/] copy ... The modifier is [b]modifier[/] under \\[keys] in
+  ~/.config/jq-tools/follow-ups/config.toml ("ctrl" by default; "alt" or "super" if you prefer). To switch
+  screens leave column mode with [b]esc[/] and press 1 / 2. [b]F1[/] opens help. [b].[/] and [b]R[/] stay plain.
 
 [b]The summary panel (Jobs)[/]
   [b]→[/]      on a job row, step into the panel on the right;  [b]←[/] (or esc) goes back to the rows
@@ -1033,8 +1034,8 @@ def build_app():
         def on_key(self, event) -> None:
             """Typing on a Jobs header starts the search right away, without Enter."""
             app = self.app
-            if "+" in event.key and event.key != "plus":
-                return  # a chord (Cmd+2, Alt+R) is a shortcut, never text for the search
+            if ("+" in event.key and event.key != "plus") or event.key in ("R", "greater_than_sign"):
+                return  # a chord (Ctrl+E) or Shift+R / Shift+. is a shortcut, never text for the search
             if app.view == "jobs" and app.col is not None and event.is_printable:
                 if event.character and event.character != " ":
                     event.stop()
@@ -1062,7 +1063,7 @@ def build_app():
             Binding("1", "view('jobs')", "Jobs"),
             Binding("2", "view('board')", "Board"),
             Binding("a", "add", "Add"),
-            Binding("alt+r", "start_session", "Session"),
+            Binding("R", "start_session", "Session"),
             Binding("e", "edit", "Edit"),
             Binding("s", "advance", "Status"),
             Binding("d", "done", "Done"),
@@ -1074,8 +1075,9 @@ def build_app():
             Binding("c", "clear_filters", "Clear", show=False),
             Binding("escape", "clear_filters", "Clear", show=False),
             Binding("full_stop", "toggle_done", "Show done"),
-            Binding("alt+full_stop", "toggle_panel", "Panel"),
+            Binding("greater_than_sign", "toggle_panel", "Panel"),
             Binding("h", "help", "Help"),
+            Binding("f1", "help", "Help", show=False),
             Binding("question_mark", "help", "Help", show=False),
             Binding("q", "quit", "Quit"),
         ]
@@ -1124,7 +1126,7 @@ def build_app():
             self.jfilters: dict = {}  # Jobs board: column -> filter
             self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
             self.launch: dict | None = None  # a new session to start once the TUI has exited
-            self.panel_shown = True  # the detail / summary panel beside the table (alt+. toggles it)
+            self.panel_shown = True  # the detail / summary panel beside the table (shift+. toggles it)
             self.col: int | None = None  # Jobs column under column mode (Enter on a row), None outside it
             self.shown_job: int | None = None  # whose summary the panel currently shows
             self.pick: str | None = None
@@ -1147,11 +1149,10 @@ def build_app():
             self.reload()
             self.query_one("#table", DataTable).focus()
 
-        # Shortcuts that also answer to modifier+key (Cmd by default), the way to reach them while
-        # a column search is typing and plain letters belong to the search box.
+        # Shortcuts that also answer to modifier+key (Ctrl by default), the way to reach them while
+        # a column search is typing and plain letters belong to the search box. Digits, c and h are
+        # left out: terminals send no Ctrl+digit, and Ctrl+c / Ctrl+h are control codes (use esc and F1).
         MODIFIED = {
-            "1": "view('jobs')",
-            "2": "view('board')",
             "a": "add",
             "e": "edit",
             "s": "advance",
@@ -1160,8 +1161,6 @@ def build_app():
             "y": "copy",
             "x": "delete",
             "f": "filter",
-            "c": "clear_filters",
-            "h": "help",
             "q": "quit",
         }
 

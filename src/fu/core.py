@@ -19,9 +19,9 @@ data_dir = "~/development/follow-ups"
 
 [keys]
 # Held with a letter it runs a shortcut (a add, e edit, y copy ...) even while a column search is
-# typing, when plain letters type instead. "super" is Cmd and needs a terminal that reports it
-# (kitty, Ghostty, WezTerm, iTerm2 with CSI u); "alt" or "ctrl" work in any terminal.
-modifier = "super"
+# typing, when plain letters type instead. "ctrl" works in every terminal; "alt" does in most;
+# "super" is Cmd and needs a terminal that reports it (kitty, Ghostty, WezTerm).
+modifier = "ctrl"
 """
 STATUSES = ("todo", "doing", "done")
 AGENTS = ("claude", "copilot")
@@ -52,7 +52,7 @@ def data_dir() -> Path:
     return Path(cfg["data_dir"]).expanduser()
 
 
-DEFAULT_MODIFIER = "super"
+DEFAULT_MODIFIER = "ctrl"
 
 
 def key_modifier() -> str:

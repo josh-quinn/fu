@@ -85,21 +85,51 @@ def test_jobs_headers_move_and_right_past_the_last_swipes_to_the_board(seeded):
     drive(steps)
 
 
-def test_alt_r_on_a_job_asks_before_restarting_its_latest_session(seeded):
+def test_alt_r_on_a_job_with_sessions_offers_restart_or_a_new_session(seeded):
     async def steps(app, pilot):
         await pilot.press("1")
         await select_job(app, pilot, "Backprop from scratch")  # the epic with two sessions
         await pilot.press("alt+r")
-        assert app.screen.__class__.__name__ == "Confirm"
-        await pilot.press("n")
+        assert app.screen.__class__.__name__ == "SessionChoice"
+        assert len(app.screen.sessions) == 2
+        await pilot.press("escape")
         assert app.pick is None and app.view == "jobs"
-        await pilot.press("alt+r", "y")
-        assert app.pick == "2"  # the most recently worked task of the job: "Vectorise softmax"
+        await pilot.press("alt+r")
+        await pilot.pause()
+        first = app.screen.sessions[0][0]
+        await pilot.press("enter")  # Restart is the default, on the first listed session
+        assert app.pick == first
 
     drive(steps)
 
 
-def test_alt_r_on_a_job_with_no_session_just_says_so(seeded):
+def test_restart_can_target_another_session_with_up_and_down(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await select_job(app, pilot, "Backprop from scratch")
+        await pilot.press("alt+r")
+        await pilot.pause()
+        second = app.screen.sessions[1][0]
+        await pilot.press("down", "enter")
+        assert app.pick == second
+
+    drive(steps)
+
+
+def test_right_picks_new_session_and_enter_opens_the_start_dialog(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await select_job(app, pilot, "Backprop from scratch")
+        await pilot.press("alt+r")
+        await pilot.pause()
+        await pilot.press("right", "enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "NewSession" and app.pick is None
+
+    drive(steps)
+
+
+def test_alt_r_on_a_job_without_sessions_goes_straight_to_the_start_dialog(seeded):
     async def steps(app, pilot):
         db = core.load_db()
         core.create_job(db, "Cheatsheet", "btw")
@@ -108,7 +138,8 @@ def test_alt_r_on_a_job_with_no_session_just_says_so(seeded):
         await pilot.press("1")
         await select_job(app, pilot, "Cheatsheet")
         await pilot.press("alt+r")
-        assert app.screen.__class__.__name__ != "Confirm"
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "NewSession"
 
     drive(steps)
 
@@ -1108,5 +1139,102 @@ def test_hiding_the_panel_while_inside_it_returns_to_the_rows(epic_board):
         assert app.in_panel
         await pilot.press("alt+full_stop")
         assert not app.in_panel and app.focused.id == "jobs-table"
+
+    drive(steps)
+
+
+async def open_new_session(app, pilot):
+    await to_row(app, pilot, "Backprop")
+    await pilot.press("alt+r")
+    await pilot.pause()
+    await pilot.press("right", "enter")
+    await pilot.pause()
+    assert app.screen.__class__.__name__ == "NewSession"
+
+
+def test_new_session_defaults_to_the_last_agent_and_folder_with_available_context_ticked(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        screen = app.screen
+        assert screen.query_one("#agent").value == "copilot"  # the most recently worked session
+        assert screen.query_one("#cwd").value == str(epic_board["docs"])
+        assert set(screen.query_one("#ctx").selected) == {"jobs", "sessions", "artifacts"}
+
+    drive(steps)
+
+
+def test_ctrl_s_starts_the_session_with_the_chosen_context_and_prompt(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        await pilot.press(*"go")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert app.launch["agent"] == "copilot" and app.launch["cwd"] == str(epic_board["docs"])
+        assert app.launch["prompt"].endswith("go") and "Child jobs:" in app.launch["prompt"]
+        assert app.launch["job_id"] == core.job_by_ref(core.load_db(), "ML-1")["id"]
+
+    drive(steps)
+
+
+def test_a_folder_that_does_not_exist_keeps_the_dialog_open(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        app.screen.query_one("#cwd").value = "/no/such/place"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "NewSession" and app.launch is None
+
+    drive(steps)
+
+
+def test_escape_cancels_the_new_session(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.launch is None and app.screen.__class__.__name__ != "NewSession"
+
+    drive(steps)
+
+
+def test_typing_a_path_suggests_folders_and_tab_completes_the_highlighted_one(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        cwd = app.screen.query_one("#cwd")
+        cwd.focus()
+        cwd.value = str(epic_board["docs"].parent) + "/wo"
+        await pilot.pause()
+        folders = app.screen.query_one("#folders")
+        assert folders.display and folders.option_count == 1
+        await pilot.press("tab")
+        assert cwd.value == str(epic_board["work"]) + "/"
+
+    drive(steps)
+
+
+def test_tab_moves_on_when_there_is_nothing_to_complete(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        before = app.focused
+        await pilot.press("tab")
+        assert app.focused is not before
+
+    drive(steps)
+
+
+def test_a_slash_in_the_prompt_suggests_skills_and_tab_inserts_one(epic_board, monkeypatch, tmp_path):
+    skills = tmp_path / "home" / ".claude" / "skills" / "jq-repo-setup"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text("x")
+
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        await pilot.press("f", "i", "x", " ", "/", "j", "q")
+        await pilot.pause()
+        box = app.screen.query_one("#skills")
+        assert box.display and str(box.get_option_at_index(0).prompt) == "/jq-repo-setup"
+        await pilot.press("tab")
+        assert app.screen.query_one("#prompt").text == "fix /jq-repo-setup "
+        assert not box.display
 
     drive(steps)

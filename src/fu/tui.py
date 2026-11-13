@@ -4,7 +4,7 @@ import os
 from datetime import date
 from pathlib import Path
 
-from fu import artifacts, summary
+from fu import artifacts, launch, summary
 from fu.core import (
     AGENTS,
     DATE_COLUMNS,
@@ -145,6 +145,7 @@ def build_app():
         Label,
         OptionList,
         Select,
+        SelectionList,
         Static,
         TextArea,
     )
@@ -772,6 +773,180 @@ def build_app():
         def action_cancel(self) -> None:
             self.dismiss(None)
 
+    class SessionChoice(ModalScreen["dict | None"]):
+        """The job already has sessions: ← → pick Restart or New Session, ↑ ↓ pick which session to restart."""
+
+        AUTO_FOCUS = ""  # keys are the screen's own; the list is only displayed
+
+        BINDINGS = [
+            Binding("escape", "cancel", "Cancel"),
+            Binding("left", "pick(-1)", show=False),
+            Binding("right", "pick(1)", show=False),
+            Binding("up", "move(-1)", show=False),
+            Binding("down", "move(1)", show=False),
+            Binding("enter", "choose", show=False),
+        ]
+
+        def __init__(self, sessions: list[tuple[str, str]]) -> None:
+            super().__init__()
+            self.sessions = sessions  # (task id, line)
+            self.mode = "restart"
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="dialog"):
+                yield Static(id="choice")
+                yield OptionList(*[Option(line, id=tid) for tid, line in self.sessions], id="sessions")
+                yield Label("[dim]← → restart or new · ↑ ↓ session · enter · esc cancels[/]")
+
+        def on_mount(self) -> None:
+            opts = self.query_one(OptionList)
+            opts.can_focus = False
+            opts.highlighted = 0
+            self.draw()
+
+        def draw(self) -> None:
+            def chip(name: str, label: str) -> str:
+                return f"[reverse b] {label} [/]" if self.mode == name else f"[dim] {label} [/]"
+
+            self.query_one("#choice", Static).update(f"{chip('restart', 'Restart')}   {chip('new', 'New Session')}")
+
+        def action_pick(self, step: int) -> None:
+            self.mode = "new" if step > 0 else "restart"
+            self.draw()
+
+        def action_move(self, step: int) -> None:
+            opts = self.query_one(OptionList)
+            at = opts.highlighted or 0
+            if 0 <= at + step < opts.option_count:
+                opts.highlighted = at + step
+
+        def action_choose(self) -> None:
+            if self.mode == "new":
+                self.dismiss({"new": True})
+            else:
+                opts = self.query_one(OptionList)
+                self.dismiss({"restart": opts.get_option_at_index(opts.highlighted or 0).id})
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
+    class NewSession(ModalScreen["dict | None"]):
+        """Start a fresh session for a job: which agent, what context to hand over, a first prompt
+        (type /name for a skill) and the folder (type a path for live folder suggestions)."""
+
+        BINDINGS = [
+            Binding("escape", "cancel", "Cancel"),
+            Binding("ctrl+s", "start", "Start"),
+            Binding("tab", "accept", show=False, priority=True),
+            Binding("ctrl+n", "next_hit", show=False, priority=True),
+            Binding("ctrl+p", "prev_hit", show=False, priority=True),
+        ]
+
+        def __init__(self, db: dict, job: dict, agent: str, cwd: str) -> None:
+            super().__init__()
+            self.db, self.job, self.agent, self.cwd = db, job, agent, cwd
+
+        def compose(self) -> ComposeResult:
+            have = launch.available(self.db, self.job)
+            with VerticalScroll(classes="dialog wide"):
+                yield Label(f"[b]New session[/] [dim]for {escape(self.job['name'])}[/]")
+                yield Label("Agent")
+                yield Select([(a, a) for a in AGENTS], value=self.agent, allow_blank=False, id="agent")
+                yield Label("Hand it" + ("" if have else "  [dim](nothing recorded for this job yet)[/]"))
+                yield SelectionList(*[(label, key, key in have) for key, label in launch.CONTEXT], id="ctx")
+                yield Label("Prompt  [dim]/ for skills · tab inserts · ctrl+n ctrl+p pick[/]")
+                yield TextArea("", id="prompt")
+                yield OptionList(id="skills")
+                yield Label("Where to start  [dim]type a path · tab completes · ctrl+n ctrl+p pick[/]")
+                yield Input(self.cwd, id="cwd")
+                yield OptionList(id="folders")
+                yield Label("[dim]ctrl+s starts the session · esc cancels[/]")
+
+        def on_mount(self) -> None:
+            for sel in ("#skills", "#folders"):
+                box = self.query_one(sel, OptionList)
+                box.can_focus = False
+                box.display = False
+                box.styles.max_height = LIST_ROWS_TYPING
+            self.query_one("#prompt", TextArea).focus()
+
+        # -- live suggestions
+        def hits(self) -> OptionList | None:
+            focus = self.focused
+            name = {"prompt": "#skills", "cwd": "#folders"}.get(getattr(focus, "id", None))
+            box = self.query_one(name, OptionList) if name else None
+            return box if box is not None and box.display and box.option_count else None
+
+        def show(self, box: OptionList, values: list[str]) -> None:
+            box.clear_options()
+            box.add_options([Option(v) for v in values])
+            box.display = bool(values)
+            box.highlighted = 0 if values else None
+
+        def skill_word(self) -> tuple[str, int, int, int] | None:
+            area = self.query_one("#prompt", TextArea)
+            row, col = area.cursor_location
+            before = area.document.get_line(row)[:col]
+            word = before.rsplit(None, 1)[-1] if before.strip() and not before[-1:].isspace() else ""
+            return (word, row, col - len(word), col) if word.startswith("/") else None
+
+        def on_text_area_changed(self, event: TextArea.Changed) -> None:
+            word = self.skill_word()
+            self.show(self.query_one("#skills", OptionList), launch.skill_suggestions(word[0]) if word else [])
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id == "cwd":
+                self.show(self.query_one("#folders", OptionList), launch.folder_suggestions(event.value))
+
+        def check_action(self, action: str, parameters: tuple) -> bool | None:
+            if action in ("next_hit", "prev_hit"):
+                return self.hits() is not None
+            return True
+
+        def action_next_hit(self) -> None:
+            box = self.hits()
+            if box and (box.highlighted or 0) + 1 < box.option_count:
+                box.highlighted = (box.highlighted or 0) + 1
+
+        def action_prev_hit(self) -> None:
+            box = self.hits()
+            if box and (box.highlighted or 0) > 0:
+                box.highlighted -= 1
+
+        def action_accept(self) -> None:
+            box = self.hits()
+            if not box:
+                self.focus_next()  # nothing to complete: Tab moves on as usual
+                return
+            value = str(box.get_option_at_index(box.highlighted or 0).prompt)
+            if box.id == "folders":
+                field = self.query_one("#cwd", Input)
+                field.value = value
+                field.cursor_position = len(value)
+            else:
+                word = self.skill_word()
+                area = self.query_one("#prompt", TextArea)
+                if word:
+                    area.replace(value + " ", (word[1], word[2]), (word[1], word[3]))
+
+        # -- finish
+        def action_start(self) -> None:
+            cwd = Path(self.query_one("#cwd", Input).value.strip() or ".").expanduser()
+            if not cwd.is_dir():
+                self.notify(f"{cwd} is not a folder", severity="error")
+                return
+            self.dismiss(
+                {
+                    "agent": self.query_one("#agent", Select).value,
+                    "cwd": str(cwd),
+                    "include": list(self.query_one("#ctx", SelectionList).selected),
+                    "prompt": self.query_one("#prompt", TextArea).text,
+                }
+            )
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
     class HeaderTable(DataTable):
         """Up from the first row steps onto the column headers; there the arrows pick a
         header, Enter acts on it (sort on the Board, filter on Jobs) and Down returns to the rows."""
@@ -886,6 +1061,8 @@ def build_app():
         .popup Input { height: 1; border: none; padding: 0 1; background: $boost; }
         .popup OptionList { height: auto; border: none; padding: 0; background: $surface; }
         #notes-text { height: 10; }
+        #prompt { height: 6; }
+        #ctx { height: 8; }
         #jobs-detail { background: $background; border: none; border-left: solid $primary 40%; padding: 1 1; }
         #jobs-detail > .option-list--option-disabled { color: $text; }
         .row { height: 1; padding: 0 1; background: $boost; }
@@ -1468,10 +1645,56 @@ def build_app():
             self.refresh_view()
 
         def action_start_session(self) -> None:
-            if self.view == "jobs":
-                self.restart_job(self.current_job())
-            else:
+            if self.view != "jobs":
                 self.resume_item(self.table_item())
+                return
+            job = self.current_job()
+            if not job:
+                return
+            sessions = summary.sessions_of(self.db, job)
+            if not sessions:
+                self.new_session(job)
+                return
+            choices = [
+                (
+                    str(summary.session_target(self.db, job, k)["id"]),
+                    summary.session_line(g[0]["agent"], g[0]["session_id"], g[0].get("cwd")),
+                )
+                for k, g in sessions
+            ]
+
+            def chosen(v: dict | None) -> None:
+                if not v:
+                    return
+                if v.get("new"):
+                    self.new_session(job)
+                else:
+                    self.pick = v["restart"]
+                    self.exit()
+
+            self.push_screen(SessionChoice(choices), chosen)
+
+        def new_session(self, job: dict) -> None:
+            """Ask how to start a session for the job, then exit so the CLI can run it."""
+            items = sorted(
+                (i for i in self.db["items"] if i.get("job_id") == job["id"] and i.get("cwd")),
+                key=lambda i: (i["last_worked"], i["id"]),
+                reverse=True,
+            )
+            last = items[0] if items else None
+
+            def started(v: dict | None) -> None:
+                if v:
+                    db = load_db()
+                    fresh = next(j for j in db["jobs"] if j["id"] == job["id"])
+                    prompt = launch.full_prompt(db, fresh, v["include"], v["prompt"])
+                    self.launch = {"job_id": job["id"], "agent": v["agent"], "cwd": v["cwd"], "prompt": prompt}
+                    self.exit()
+
+            self.push_screen(
+                NewSession(self.db, job, last["agent"] if last else AGENTS[0], last["cwd"] if last else os.getcwd()),
+                started,
+            )
 
         def action_help(self) -> None:
             self.push_screen(Help())

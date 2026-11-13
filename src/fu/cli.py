@@ -226,6 +226,20 @@ def cmd_resume(a) -> None:
     os.execvp("/bin/sh", ["sh", "-c", cmd])
 
 
+def start_session(spec: dict) -> None:
+    """Open a new agent session for a job: record it as a task of that job, then replace this process."""
+    from fu import launch
+
+    db = load_db()
+    job = next(j for j in db["jobs"] if j["id"] == spec["job_id"])
+    sid = launch.new_session_id()
+    cwd = str(Path(spec["cwd"]).expanduser())
+    new_item(db, job["name"], job=job["name"], agent=spec["agent"], session_id=sid, cwd=cwd, status="doing")
+    save_db(db)
+    cmd = launch.launch_cmd(spec["agent"], sid, cwd, spec["prompt"])
+    os.execvp("/bin/sh", ["sh", "-c", cmd])
+
+
 def cmd_skill(a) -> None:
     """Link (or copy) the packaged skill into the agents' skill folders."""
     import shutil
@@ -504,7 +518,9 @@ def main() -> None:
         from fu.tui import run_tui  # lazy: plain CLI calls should not import Textual
 
         picked = run_tui()
-        if picked:
+        if isinstance(picked, dict):
+            start_session(picked)
+        elif picked:
             cmd_resume(argparse.Namespace(id=picked, print=False))
     else:
         cmd_ls(

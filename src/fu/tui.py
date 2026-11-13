@@ -906,6 +906,7 @@ def build_app():
             self.filters: dict = {}
             self.jfilters: dict = {}  # Jobs board: column -> filter
             self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
+            self.launch: dict | None = None  # a new session to start once the TUI has exited
             self.panel_shown = True  # the detail / summary panel beside the table (alt+. toggles it)
             self.col: int | None = None  # Jobs column under column mode (Enter on a row), None outside it
             self.shown_job: int | None = None  # whose summary the panel currently shows
@@ -1662,8 +1663,8 @@ def build_app():
     return Board()
 
 
-def run_tui() -> str | None:
-    """Run the board; returns the id to resume, if the user picked one."""
+def run_tui() -> "str | dict | None":
+    """Run the board; returns the id to resume, or a spec for a new session, if the user picked one."""
     app = build_app()
     app.run()
-    return app.pick
+    return app.launch or app.pick

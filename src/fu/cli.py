@@ -25,6 +25,7 @@ from fu.core import (
     detect_agent,
     detect_session,
     find,
+    home_path,
     job_by_ref,
     job_label,
     job_name,
@@ -285,7 +286,7 @@ def cmd_job_add(a) -> None:
     name = " ".join(a.name)
     if job_by_ref(db, name, fuzzy=False):
         sys.exit(f"fu: job '{name}' already exists")
-    job = create_job(db, name, a.kind, ext_id=a.id or "", parent=a.parent, desc=a.desc or "")
+    job = create_job(db, name, a.kind, ext_id=a.id or "", parent=a.parent, desc=a.desc or "", home=a.home or "")
     save_db(db)
     print(f"added job {job_label(job)}: {job['name']} ({job['kind']})" + (f" under {a.parent}" if a.parent else ""))
 
@@ -320,6 +321,8 @@ def cmd_job_edit(a) -> None:
         job["ext_id"] = a.id.strip()
     if a.parent is not None:
         set_parent(db, job, a.parent)
+    if a.home is not None:
+        job["home"] = home_path(a.home)
     save_db(db)
     print(f"updated {job_label(job)}")
 
@@ -483,6 +486,7 @@ def main() -> None:
     sp.add_argument("--id", help="your own id for it, e.g. a Jira key (optional; ideas and btws rarely have one)")
     sp.add_argument("--parent", help="job this one belongs to, e.g. the epic of a story")
     sp.add_argument("--desc")
+    sp.add_argument("--home", help="the job's home folder (new sessions start there)")
     sp = parser("ls", cmd_job_ls, "list jobs with counts", aliases=["list"], parent=jsub)
     sp.add_argument("--json", action="store_true")
     sp = parser("edit", cmd_job_edit, "rename or change a job", parent=jsub)
@@ -493,6 +497,7 @@ def main() -> None:
     sp.add_argument("--parent", help="parent job, or 'none'")
     sp.add_argument("--desc")
     sp.add_argument("--notes", help="free-text notes on the job (the Jobs screen's Notes entry)")
+    sp.add_argument("--home", help="the job's home folder (new sessions start there), or '' for none")
     sp = parser("rm", cmd_job_rm, "delete a job (its tasks are kept, unassigned)", aliases=["delete"], parent=jsub)
     sp.add_argument("ref")
     sp.add_argument("-y", "--yes", action="store_true")

@@ -102,6 +102,7 @@ def load_db() -> dict:
         job.setdefault("ext_id", "")
         job.setdefault("parent_id", None)
         job.setdefault("notes", "")
+        job.setdefault("home", "")
     return db
 
 
@@ -196,7 +197,9 @@ def remove_job(db: dict, job: dict) -> int:
     return n
 
 
-def create_job(db: dict, name: str, kind: str | None = None, ext_id: str = "", parent=None, desc: str = "") -> dict:
+def create_job(
+    db: dict, name: str, kind: str | None = None, ext_id: str = "", parent=None, desc: str = "", home: str = ""
+) -> dict:
     ext_id = ext_id.strip()
     check_ext_id(db, ext_id)
     job = {
@@ -207,12 +210,18 @@ def create_job(db: dict, name: str, kind: str | None = None, ext_id: str = "", p
         "parent_id": None,
         "description": desc,
         "notes": "",
+        "home": home_path(home),
         "created": today(),
     }
     db["jobs"].append(job)
     if parent:
         set_parent(db, job, parent)
     return job
+
+
+def home_path(folder: str) -> str:
+    """A job's home folder as stored: absolute, '' for none."""
+    return str(Path(folder.strip()).expanduser().resolve()) if folder and folder.strip() else ""
 
 
 def ensure_job(db: dict, ref: str, kind: str | None = None) -> dict:
@@ -367,6 +376,12 @@ def job_rows(db: dict) -> list[dict]:
         for j in db["jobs"]
     ]
     return sorted(rows, key=lambda r: (r["last_worked"], r["job"]["id"]), reverse=True)
+
+
+def sort_jobs(rows: list[dict], column: str = "last_worked", descending: bool = True) -> list[dict]:
+    """Order Jobs rows by one column; ties fall back to last worked, then the job id."""
+    rows = sorted(rows, key=lambda r: (r["last_worked"], r["job"]["id"]))
+    return sorted(rows, key=lambda r: r[column].lower(), reverse=descending)
 
 
 def filter_jobs(rows: list[dict], filters: dict) -> list[dict]:

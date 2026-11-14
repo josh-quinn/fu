@@ -254,3 +254,10 @@ def test_start_session_records_a_task_on_the_job_and_runs_the_agent(monkeypatch,
     assert (item["job_id"], item["agent"], item["status"], item["cwd"]) == (job["id"], "claude", "doing", str(tmp_path))
     assert f"--session-id {item['session_id']} hello" in ran[0][-1]
     assert ran[0][-1].startswith(f"cd {tmp_path} && claude ")
+
+
+def test_job_add_and_edit_set_the_home_folder(monkeypatch, capsys, tmp_path):
+    run(monkeypatch, capsys, "job", "add", "Homed", "--home", str(tmp_path))
+    assert core.load_db()["jobs"][0]["home"] == str(tmp_path.resolve())
+    run(monkeypatch, capsys, "job", "edit", "Homed", "--home", "")
+    assert core.load_db()["jobs"][0]["home"] == ""

@@ -354,3 +354,25 @@ class TestSessions:
         key = "claude:aaaa1111-0000-0000-0000-000000000001"
         assert core.session_label(key, groups[key]) == "claude aaaa1111 · w"
         assert core.session_label("", []) == "no session"
+
+
+def test_a_job_has_a_home_folder_stored_absolute(tmp_path):
+    db = core.load_db()
+    (tmp_path / "repo").mkdir()
+    job = core.create_job(db, "With home", home=str(tmp_path / "repo"))
+    assert job["home"] == str((tmp_path / "repo").resolve())
+    assert core.create_job(db, "Without")["home"] == ""
+
+
+def test_old_jobs_get_an_empty_home():
+    core.save_db({"items": [], "jobs": [{"id": 1, "name": "Old", "kind": "story", "created": "2026-01-01"}]})
+    assert core.load_db()["jobs"][0]["home"] == ""
+
+
+def test_jobs_sort_by_any_column_both_ways():
+    db = core.load_db()
+    for name in ("beta", "Alpha", "gamma"):
+        core.create_job(db, name)
+    rows = core.job_rows(db)
+    assert [r["title"] for r in core.sort_jobs(rows, "title", False)] == ["Alpha", "beta", "gamma"]
+    assert [r["title"] for r in core.sort_jobs(rows, "title", True)] == ["gamma", "beta", "Alpha"]

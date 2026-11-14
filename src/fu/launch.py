@@ -189,7 +189,7 @@ def brief(
         out += ["", "## Parent job (the bigger piece this belongs to)", *_job_block(db, parent)]
 
     if "tasks" in include:
-        tasks = [i for i in open_tasks(db, job) if _wanted(picked, "tasks", str(i["id"]))]
+        tasks = [i for i in open_tasks(db, job) if i["id"] != task_id and _wanted(picked, "tasks", str(i["id"]))]
         if tasks:
             out += ["", "## Open follow-ups (parked work on this job, most active first)"]
             for i in tasks:
@@ -209,7 +209,8 @@ def brief(
                 out += [f"- {block[0]}", *[f"  {line}" for line in block[1:]]]
 
     if "sessions" in include:
-        sessions = [(k, g) for k, g in summary.sessions_of(db, job) if _wanted(picked, "sessions", k)]
+        own = {core.skey(i) for i in db["items"] if i["id"] == task_id}  # the session being started
+        sessions = [(k, g) for k, g in summary.sessions_of(db, job) if k not in own and _wanted(picked, "sessions", k)]
         if sessions:
             out += ["", "## Earlier sessions on this job (newest first)"]
             for _, group in sessions:

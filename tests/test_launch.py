@@ -91,6 +91,8 @@ def test_prepare_records_the_task_writes_the_brief_and_returns_the_command(db, t
     assert item["summary"] == "hello"
     brief = launch.brief_path(item["session_id"])
     assert brief.exists() and f"task #{item['id']}" in brief.read_text()
+    text = launch.brief(core.load_db(), epic, ["tasks", "sessions"], task_id=item["id"])
+    assert "hello" not in text and item["session_id"][:8] not in text  # never lists itself as earlier work
     assert f"--session-id {item['session_id']}" in cmd and str(brief) in cmd and cmd.endswith(" hello")
 
 

@@ -255,8 +255,8 @@ def test_type_header_offers_the_default_kinds_and_searches_them(seeded):
         opts = app.screen.query_one(OptionList)
         assert opts.option_count == len(core.KINDS)  # the whole default list before anything is typed
         assert opts.size.height == len(core.KINDS)  # ...and every one of them is visible, none hidden by a scrollbar
-        await pilot.press(*"gu")
-        assert [str(opts.get_option_at_index(n).prompt) for n in range(opts.option_count)] == ["guide"]
+        await pilot.press(*"sp")
+        assert [str(opts.get_option_at_index(n).prompt) for n in range(opts.option_count)] == ["spike"]
 
     drive(steps)
 
@@ -1171,10 +1171,9 @@ def test_plain_letters_type_in_column_mode_but_ctrl_runs_shortcuts(epic_board):
 
 
 def test_the_shortcut_modifier_comes_from_the_config(epic_board, tmp_path, monkeypatch):
-    cfg = tmp_path / "cfg" / "follow-ups" / "config.toml"
+    cfg = tmp_path / "cfg" / "follow-ups" / "config.yaml"
     cfg.parent.mkdir(parents=True)
-    cfg.write_text('[keys]\nmodifier = "alt"\n')
-    monkeypatch.setattr(core, "CONFIG_FILE", cfg)  # CONFIG_FILE is fixed at import, so point it at the sandbox
+    cfg.write_text("keys:\n  modifier: alt\n")
 
     async def steps(app, pilot):
         await enter_column_mode(app, pilot)

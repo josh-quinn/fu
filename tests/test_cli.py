@@ -52,9 +52,16 @@ def test_a_new_job_defaults_to_a_story(monkeypatch, capsys):
     assert json.loads(run(monkeypatch, capsys, "job", "ls", "--json"))[0]["kind"] == "story"
 
 
-def test_old_kinds_are_no_longer_accepted(monkeypatch, capsys):
-    with pytest.raises(SystemExit):
-        run(monkeypatch, capsys, "job", "add", "x", "--kind", "misc")
+def test_a_type_of_your_own_is_kept_and_offered_next_time(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "x", "--kind", "chore")
+    assert "chore" in core.job_types(core.load_db())
+
+
+def test_a_job_without_a_jira_key_takes_a_project_by_hand(monkeypatch, capsys):
+    run(monkeypatch, capsys, "job", "add", "Dashboards", "--project", "OPS")
+    run(monkeypatch, capsys, "job", "add", "Backprop", "--id", "ML-4", "--project", "IGNORED")
+    jobs = {j["name"]: j for j in core.load_db()["jobs"]}
+    assert core.project_of(jobs["Dashboards"]) == "OPS" and core.project_of(jobs["Backprop"]) == "ML"
 
 
 def test_job_with_external_id_and_parent(monkeypatch, capsys):

@@ -9,7 +9,6 @@ from fu.core import (
     AGENTS,
     DATE_COLUMNS,
     DEFAULT_KIND,
-    KIND_GLYPH,
     KINDS,
     MONTHS,
     STATUSES,
@@ -21,6 +20,7 @@ from fu.core import (
     descendants,
     filter_jobs,
     fmt_date,
+    glyph,
     heat,
     home_path,
     idle_days,
@@ -1678,9 +1678,7 @@ def build_app():
                 cells = [
                     Text(str(i["id"]), style="dim"),
                     Text(label, style=colour),
-                    Text(
-                        f"{KIND_GLYPH[job['kind']]} {clip(job['name'], 16)}" if job else "-", style="" if job else "dim"
-                    ),
+                    Text(f"{glyph(job['kind'])} {clip(job['name'], 16)}" if job else "-", style="" if job else "dim"),
                     Text(i["summary"], style="dim" if i["status"] == "done" else "bold"),
                     Text(i["added"], style="dim"),
                     Text(f"{i['last_worked']}  {age(i['last_worked'])}", style=heat(idle_days(i))),
@@ -1735,7 +1733,7 @@ def build_app():
                 job = r["job"]
                 cells = [
                     Text(r["id"], style="dim"),
-                    Text(f"{KIND_GLYPH[r['kind']]} {r['kind']}"),
+                    Text(f"{glyph(r['kind'])} {r['kind']}"),
                     Text(clip(r["parent"], 14) or "-", style="" if r["parent"] else "dim"),
                     Text(job["name"], style="bold"),
                     Text(r["added"], style="dim"),

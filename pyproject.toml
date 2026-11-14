@@ -20,7 +20,10 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Utilities",
 ]
-dependencies = ["textual>=0.86"]
+dependencies = [
+    "pyyaml>=6.0",
+    "textual>=0.86",
+]
 
 [project.urls]
 Homepage = "https://github.com/josh-quinn/fu"

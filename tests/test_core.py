@@ -12,7 +12,7 @@ def days_ago(n: int) -> str:
 
 class TestStorage:
     def test_missing_board_is_empty(self):
-        assert core.load_db() == {"items": [], "jobs": []}
+        assert core.load_db() == {"items": [], "jobs": [], "types": []}
 
     def test_board_written_before_jobs_existed_still_loads(self):
         core.data_dir().mkdir(parents=True)
@@ -41,10 +41,13 @@ class TestJobs:
     def test_legacy_kinds_and_missing_fields_are_upgraded_on_load(self):
         path = core.data_dir()
         path.mkdir(parents=True)
-        legacy = {"items": [], "jobs": [{"id": 1, "name": "a", "kind": "misc"}, {"id": 2, "name": "b", "kind": "task"}]}
+        legacy = {
+            "items": [],
+            "jobs": [{"id": n, "name": k, "kind": k} for n, k in enumerate(["misc", "idea", "btw", "guide", "task"])],
+        }
         (path / "board.json").write_text(json.dumps(legacy))
         jobs = core.load_db()["jobs"]
-        assert [j["kind"] for j in jobs] == ["btw", "story"]
+        assert [j["kind"] for j in jobs] == ["task"] * 5  # an idea is a follow-up now; a guide is an output
         assert all(j["ext_id"] == "" and j["parent_id"] is None for j in jobs)
 
     def test_lookup_by_id_prefixed_id_exact_and_unique_substring(self, seeded):
@@ -73,7 +76,8 @@ class TestJobs:
 
 class TestJobHierarchy:
     def test_default_kinds_are_the_agreed_list(self):
-        assert core.KINDS == ("epic", "story", "bug", "spike", "idea", "btw", "guide")
+        assert core.KINDS == ("epic", "story", "bug", "spike", "task")
+        assert core.job_types() == list(core.KINDS)
 
     def test_new_job_defaults_to_a_story_with_no_external_id(self):
         db = core.load_db()
@@ -293,7 +297,7 @@ class TestJobsBoard:
 
     def test_kind_suggestions_are_the_default_list_whether_or_not_a_job_uses_them(self):
         assert core.suggestions(core.job_rows(core.load_db()), "kind") == list(core.KINDS)
-        assert core.suggestions([], "kind", "gu") == ["guide"]
+        assert core.suggestions([], "kind", "sp") == ["spike"]
 
     def test_resume_picks_the_most_recent_restartable_task(self):
         db = self.board()

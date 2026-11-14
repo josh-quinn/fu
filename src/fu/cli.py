@@ -10,9 +10,7 @@ from pathlib import Path
 from fu import artifacts
 from fu.core import (
     AGENTS,
-    CONFIG_FILE,
     DEFAULT_KIND,
-    KIND_GLYPH,
     KINDS,
     STATUSES,
     UNSET,
@@ -25,6 +23,7 @@ from fu.core import (
     detect_agent,
     detect_session,
     find,
+    glyph,
     home_path,
     job_by_ref,
     job_label,
@@ -34,6 +33,7 @@ from fu.core import (
     matches,
     new_item,
     public,
+    remember_type,
     remove_job,
     resume_cmd,
     save_db,
@@ -254,7 +254,9 @@ def cmd_skill(a) -> None:
 
 
 def cmd_path(a) -> None:
-    print(f"data    {data_dir()}\nconfig  {CONFIG_FILE}")
+    from fu import config
+
+    print(f"data    {data_dir()}\nconfig  {config.CONFIG_FILE}")
 
 
 def job_stats(db: dict, job: dict) -> dict:
@@ -272,7 +274,16 @@ def cmd_job_add(a) -> None:
     name = " ".join(a.name)
     if job_by_ref(db, name, fuzzy=False):
         sys.exit(f"fu: job '{name}' already exists")
-    job = create_job(db, name, a.kind, ext_id=a.id or "", parent=a.parent, desc=a.desc or "", home=a.home or "")
+    job = create_job(
+        db,
+        name,
+        a.kind,
+        ext_id=a.id or "",
+        parent=a.parent,
+        desc=a.desc or "",
+        home=a.home or "",
+        project=a.project or "",
+    )
     save_db(db)
     print(f"added job {job_label(job)}: {job['name']} ({job['kind']})" + (f" under {a.parent}" if a.parent else ""))
 
@@ -302,6 +313,10 @@ def cmd_job_edit(a) -> None:
     for field, value in (("name", a.name), ("kind", a.kind), ("description", a.desc), ("notes", a.notes)):
         if value is not None:
             job[field] = value
+    if a.kind:
+        remember_type(db, a.kind)
+    if a.project is not None:
+        job["project"] = a.project.strip()
     if a.id is not None:
         check_ext_id(db, a.id.strip(), job)
         job["ext_id"] = a.id.strip()
@@ -357,7 +372,7 @@ def cmd_tree(a) -> None:
         if job is None and not its:
             continue
         print(
-            f"  {KIND_GLYPH[job['kind']] if job else ' '} {job['name'] if job else '(no job)'}"
+            f"  {glyph(job['kind']) if job else ' '} {job['name'] if job else '(no job)'}"
             + (f"  [{job['kind']}]" if job else "")
         )
         groups = by_session(its)
@@ -397,7 +412,7 @@ def main() -> None:
     sp.add_argument("summary", nargs="+", help="one-line topic")
     sp.add_argument("--why", help="why you started it / where you left off")
     sp.add_argument("--job", help="job name or id to file it under (a new name creates the job)")
-    sp.add_argument("--kind", choices=KINDS, help="kind for a newly created job (default story)")
+    sp.add_argument("--kind", help="type for a newly created job (default story)")
     sp.add_argument(
         "--artifact",
         action="append",
@@ -433,7 +448,7 @@ def main() -> None:
     sp.add_argument("--why")
     sp.add_argument("--status", choices=STATUSES)
     sp.add_argument("--job", help="job name/id to file it under, or 'none'")
-    sp.add_argument("--kind", choices=KINDS, help="kind if --job creates a new job")
+    sp.add_argument("--kind", help="type if --job creates a new job")
     sp.add_argument("--agent", choices=AGENTS)
     sp.add_argument("--session-id")
     sp.add_argument("--cwd")
@@ -464,26 +479,28 @@ def main() -> None:
     sp.add_argument("id")
     sp.add_argument("--print", action="store_true", help="print the command instead of running it")
 
-    jp = sub.add_parser("job", help="manage jobs (" + ", ".join(KINDS) + ")")
+    jp = sub.add_parser("job", help="manage jobs (" + ", ".join(KINDS) + ", or your own types)")
     jsub = jp.add_subparsers(dest="jcmd", required=True)
     sp = parser("add", cmd_job_add, "create a job", parent=jsub)
     sp.add_argument("name", nargs="+")
-    sp.add_argument("--kind", choices=KINDS, default=DEFAULT_KIND)
+    sp.add_argument("--kind", default=DEFAULT_KIND, help="epic, story, bug, spike, task, or your own")
     sp.add_argument("--id", help="your own id for it, e.g. a Jira key (optional; ideas and btws rarely have one)")
     sp.add_argument("--parent", help="job this one belongs to, e.g. the epic of a story")
     sp.add_argument("--desc")
     sp.add_argument("--home", help="the job's home folder (new sessions start there)")
+    sp.add_argument("--project", help="project for a job without a Jira key (a Jira key sets it)")
     sp = parser("ls", cmd_job_ls, "list jobs with counts", aliases=["list"], parent=jsub)
     sp.add_argument("--json", action="store_true")
     sp = parser("edit", cmd_job_edit, "rename or change a job", parent=jsub)
     sp.add_argument("ref", help="job name or id")
     sp.add_argument("--name")
-    sp.add_argument("--kind", choices=KINDS)
+    sp.add_argument("--kind")
     sp.add_argument("--id", help="your own id (pass '' to clear it)")
     sp.add_argument("--parent", help="parent job, or 'none'")
     sp.add_argument("--desc")
     sp.add_argument("--notes", help="free-text notes on the job (the Jobs screen's Notes entry)")
     sp.add_argument("--home", help="the job's home folder (new sessions start there), or '' for none")
+    sp.add_argument("--project", help="project for a job without a Jira key, or '' for none")
     sp = parser("rm", cmd_job_rm, "delete a job (its tasks are kept, unassigned)", aliases=["delete"], parent=jsub)
     sp.add_argument("ref")
     sp.add_argument("-y", "--yes", action="store_true")

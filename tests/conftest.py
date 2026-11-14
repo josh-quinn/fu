@@ -2,7 +2,7 @@
 
 import pytest
 
-from fu import core
+from fu import config, core
 
 
 @pytest.fixture(autouse=True)
@@ -13,7 +13,7 @@ def isolated(tmp_path, monkeypatch):
     for var in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.delenv(var, raising=False)
     # CONFIG_FILE is fixed when core is imported, so the env var above is too late to protect it
-    monkeypatch.setattr(core, "CONFIG_FILE", tmp_path / "cfg" / "follow-ups" / "config.toml")
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "cfg" / "follow-ups" / "config.yaml")
     monkeypatch.setattr(core, "COPILOT_SESSIONS", tmp_path / "copilot-sessions")
     return tmp_path
 

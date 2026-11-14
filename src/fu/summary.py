@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from fu import artifacts
-from fu.core import KIND_GLYPH, by_session, job_label, job_status
+from fu.core import by_session, glyph, job_label, job_status
 
 
 def session_line(agent: str | None, sid: str, cwd: str | None) -> str:
@@ -81,7 +81,7 @@ def build(db: dict, job: dict) -> list[dict]:
     def add(style: str, text: str, key: str | None = None, enabled: bool | None = None) -> None:
         out.append({"key": key, "style": style, "text": text, "enabled": bool(key) if enabled is None else enabled})
 
-    add("title", f"{KIND_GLYPH[job['kind']]} {job['name']}")
+    add("title", f"{glyph(job['kind'])} {job['name']}")
     add("meta", f"{job_label(job)} · {job['kind']}" + (f" · under {parent['name']}" if parent else ""))
     add("head", "Why")
     add(

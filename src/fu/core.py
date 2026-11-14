@@ -2,36 +2,26 @@
 
 import json
 import os
+import re
 import shlex
 import sys
 import tempfile
-import tomllib
 from datetime import date, timedelta
 from pathlib import Path
 
-# All jq-tools configs live under ~/.config/jq-tools/<tool>/ (see ~/.claude/rules).
-CONFIG_ROOT = Path(os.environ.get("JQ_TOOLS_CONFIG", "~/.config/jq-tools")).expanduser()
-CONFIG_FILE = CONFIG_ROOT / "follow-ups" / "config.toml"
-DEFAULT_TOML = """\
-# follow-ups (fu) config
-# Where board.json and BOARD.md live. FU_DATA_DIR overrides this per command.
-data_dir = "~/development/follow-ups"
+from fu import config
 
-[keys]
-# Held with a letter it runs a shortcut (a add, e edit, y copy ...) even while a column search is
-# typing, when plain letters type instead. "ctrl" works in every terminal; "alt" does in most;
-# "super" is Cmd and needs a terminal that reports it (kitty, Ghostty, WezTerm).
-modifier = "ctrl"
-"""
 STATUSES = ("todo", "doing", "done")
 AGENTS = ("claude", "copilot")
-# idea: popped into your head and you started on it; btw: a small thing from a
-# session worth keeping; guide: a side quest that became a runbook or how-to.
-KINDS = ("epic", "story", "bug", "spike", "idea", "btw", "guide")
-KIND_GLYPH = {"epic": "◈", "story": "❖", "bug": "✱", "spike": "↯", "idea": "✦", "btw": "·", "guide": "≡"}
+# Job types describe work (ADR 0007); config.yaml can replace or extend them, and the TUI's "Other…"
+# adds the user's own to the board.
+KINDS = ("epic", "story", "bug", "spike", "task")
+KIND_GLYPH = {"epic": "◈", "story": "❖", "bug": "✱", "spike": "↯", "task": "▪"}
 DEFAULT_KIND = "story"
-# Kinds from boards written before these were the default list.
-LEGACY_KINDS = {"task": "story", "misc": "btw"}
+# Retired kinds: an idea is a follow-up and a cheatsheet or runbook is an output, so old jobs of
+# those kinds become plain tasks.
+LEGACY_KINDS = {"idea": "task", "btw": "task", "guide": "task", "misc": "task"}
+JIRA_KEY = re.compile(r"^([A-Z][A-Z0-9]+)-\d+$")
 COPILOT_SESSIONS = Path("~/.copilot/session-state").expanduser()
 UNSET = object()
 
@@ -43,26 +33,29 @@ def data_dir() -> Path:
     override = os.environ.get("FU_DATA_DIR")
     if override:
         return Path(override).expanduser()
-    cfg = {"data_dir": "~/development/follow-ups"}
-    if CONFIG_FILE.exists():
-        cfg.update(tomllib.loads(CONFIG_FILE.read_text()))
-    elif "JQ_TOOLS_CONFIG" not in os.environ:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(DEFAULT_TOML)
-    return Path(cfg["data_dir"]).expanduser()
-
-
-DEFAULT_MODIFIER = "ctrl"
+    return Path(str(config.load()["data_dir"])).expanduser()
 
 
 def key_modifier() -> str:
-    """The modifier that runs shortcuts while a search is typing (`[keys] modifier` in the config)."""
-    try:
-        keys = tomllib.loads(CONFIG_FILE.read_text()).get("keys", {}) if CONFIG_FILE.exists() else {}
-    except (OSError, ValueError):
-        return DEFAULT_MODIFIER
-    mod = keys.get("modifier", DEFAULT_MODIFIER)
-    return mod if mod in ("super", "alt", "ctrl", "meta") else DEFAULT_MODIFIER
+    """The modifier that runs shortcuts while a search is typing (`keys: modifier` in the config)."""
+    return config.modifier()
+
+
+def glyph(kind: str) -> str:
+    return KIND_GLYPH.get(kind, "•")
+
+
+def job_types(db: dict | None = None, project: str | None = None) -> list[str]:
+    """The job types on offer: the config's (for this project), then the user's own from the board."""
+    jobs = config.for_project(project).get("jobs") or {}
+    types = [*(jobs.get("types") or KINDS), *(jobs.get("extra_types") or []), *((db or {}).get("types") or [])]
+    return list(dict.fromkeys(str(t) for t in types))
+
+
+def project_of(job: dict) -> str:
+    """The Jira project key in the job's ID (ML in ML-12), else the project set by hand."""
+    m = JIRA_KEY.match(job.get("ext_id") or "")
+    return m.group(1) if m else job.get("project", "")
 
 
 def today() -> str:
@@ -103,6 +96,8 @@ def load_db() -> dict:
         job.setdefault("parent_id", None)
         job.setdefault("notes", "")
         job.setdefault("home", "")
+        job.setdefault("project", "")
+    db.setdefault("types", [])
     return db
 
 
@@ -198,7 +193,14 @@ def remove_job(db: dict, job: dict) -> int:
 
 
 def create_job(
-    db: dict, name: str, kind: str | None = None, ext_id: str = "", parent=None, desc: str = "", home: str = ""
+    db: dict,
+    name: str,
+    kind: str | None = None,
+    ext_id: str = "",
+    parent=None,
+    desc: str = "",
+    home: str = "",
+    project: str = "",
 ) -> dict:
     ext_id = ext_id.strip()
     check_ext_id(db, ext_id)
@@ -211,12 +213,20 @@ def create_job(
         "description": desc,
         "notes": "",
         "home": home_path(home),
+        "project": project.strip(),
         "created": today(),
     }
+    remember_type(db, job["kind"])
     db["jobs"].append(job)
     if parent:
         set_parent(db, job, parent)
     return job
+
+
+def remember_type(db: dict, kind: str) -> None:
+    """A type the user made up is kept on the board so it is offered next time."""
+    if kind and kind not in job_types(db):
+        db.setdefault("types", []).append(kind)
 
 
 def home_path(folder: str) -> str:
@@ -340,7 +350,11 @@ def sort_board(db: dict, items: list[dict], column: str = "status", descending: 
 
 
 def jobs_ordered(db: dict) -> list[dict]:
-    return sorted(db["jobs"], key=lambda j: (KINDS.index(j["kind"]), j["name"].lower()))
+    order = job_types(db)
+    return sorted(
+        db["jobs"],
+        key=lambda j: (order.index(j["kind"]) if j["kind"] in order else len(order), j["name"].lower()),
+    )
 
 
 # ------------------------------------------------------------- jobs board
@@ -368,6 +382,7 @@ def job_rows(db: dict) -> list[dict]:
             "job": j,
             "id": job_label(j),
             "kind": j["kind"],
+            "project": project_of(j),
             "parent": by_id[j["parent_id"]]["name"] if j["parent_id"] in by_id else "",
             "title": j["name"],
             "added": j["created"],
@@ -400,7 +415,11 @@ def filter_jobs(rows: list[dict], filters: dict) -> list[dict]:
 
 def suggestions(rows: list[dict], column: str, typed: str = "") -> list[str]:
     """Distinct values of a column that match what has been typed, prefix matches first."""
-    values = list(KINDS) if column == "kind" else sorted({r[column] for r in rows if r[column]}, key=str.lower)
+    values = (
+        list(dict.fromkeys([*job_types(), *(r[column] for r in rows)]))
+        if column == "kind"
+        else sorted({r[column] for r in rows if r[column]}, key=str.lower)
+    )
     low = typed.strip().lower()
     hits = [v for v in values if low in v.lower()]
     return sorted(hits, key=lambda v: not v.lower().startswith(low))  # stable: prefix hits first

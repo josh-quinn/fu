@@ -216,29 +216,15 @@ def cmd_rm(a) -> None:
 
 
 def cmd_resume(a) -> None:
-    item = find(load_db()["items"], a.id)
-    cmd = resume_cmd(item)
-    if not cmd:
-        sys.exit("fu: no session id stored for this item; set one with `fu edit ID --agent ... --session-id ...`")
-    if a.print:
-        print(cmd)
-        return
-    update(a.id, last_worked=today(), **({"status": "doing"} if item["status"] == "todo" else {}))
-    os.execvp("/bin/sh", ["sh", "-c", cmd])
-
-
-def start_session(spec: dict) -> None:
-    """Open a new agent session for a job: record it as a task of that job, then replace this process."""
     from fu import launch
 
-    db = load_db()
-    job = next(j for j in db["jobs"] if j["id"] == spec["job_id"])
-    sid = launch.new_session_id()
-    cwd = str(Path(spec["cwd"]).expanduser())
-    new_item(db, job["name"], job=job["name"], agent=spec["agent"], session_id=sid, cwd=cwd, status="doing")
-    save_db(db)
-    cmd = launch.launch_cmd(spec["agent"], sid, cwd, spec["prompt"])
-    os.execvp("/bin/sh", ["sh", "-c", cmd])
+    item = find(load_db()["items"], a.id)
+    if not resume_cmd(item):
+        sys.exit("fu: no session id stored for this item; set one with `fu edit ID --agent ... --session-id ...`")
+    if a.print:
+        print(resume_cmd(item))
+        return
+    os.execvp("/bin/sh", ["sh", "-c", launch.prepare_resume(a.id)])
 
 
 def cmd_skill(a) -> None:
@@ -522,11 +508,7 @@ def main() -> None:
     elif sys.stdout.isatty():
         from fu.tui import run_tui  # lazy: plain CLI calls should not import Textual
 
-        picked = run_tui()
-        if isinstance(picked, dict):
-            start_session(picked)
-        elif picked:
-            cmd_resume(argparse.Namespace(id=picked, print=False))
+        run_tui()  # sessions started from the board run inside it, and the board comes back after
     else:
         cmd_ls(
             argparse.Namespace(

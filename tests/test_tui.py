@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,8 @@ def drive(steps):
 
     async def scenario():
         app = build_app()
+        app.ran = []
+        app.runner = app.ran.append  # record the commands sessions would run instead of running them
         async with app.run_test(size=SIZE) as pilot:
             await pilot.pause()
             await steps(app, pilot)
@@ -93,12 +96,14 @@ def test_shift_r_on_a_job_with_sessions_offers_restart_or_a_new_session(seeded):
         assert app.screen.__class__.__name__ == "SessionChoice"
         assert len(app.screen.sessions) == 2
         await pilot.press("escape")
-        assert app.pick is None and app.view == "jobs"
+        assert app.ran == [] and app.view == "jobs"
         await pilot.press("R")
         await pilot.pause()
         first = app.screen.sessions[0][0]
         await pilot.press("enter")  # Restart is the default, on the first listed session
-        assert app.pick == first
+        await pilot.pause()
+        assert app.ran == [core.resume_cmd(core.find(core.load_db()["items"], first))]
+        assert app.screen.__class__.__name__ != "SessionChoice"  # back on the board once the session ends
 
     drive(steps)
 
@@ -111,7 +116,8 @@ def test_restart_can_target_another_session_with_up_and_down(seeded):
         await pilot.pause()
         second = app.screen.sessions[1][0]
         await pilot.press("down", "enter")
-        assert app.pick == second
+        await pilot.pause()
+        assert app.ran == [core.resume_cmd(core.find(core.load_db()["items"], second))]
 
     drive(steps)
 
@@ -122,9 +128,12 @@ def test_right_picks_new_session_and_enter_opens_the_start_dialog(seeded):
         await select_job(app, pilot, "Backprop from scratch")
         await pilot.press("R")
         await pilot.pause()
-        await pilot.press("right", "enter")
+        await pilot.press("right")
         await pilot.pause()
-        assert app.screen.__class__.__name__ == "NewSession" and app.pick is None
+        assert not app.screen.query_one("#sessions").display  # New Session hides the list of old ones
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "NewSession" and app.ran == []
 
     drive(steps)
 
@@ -743,16 +752,16 @@ def test_jumping_to_a_job_hidden_by_a_filter_clears_the_filters(epic_board):
     drive(steps)
 
 
-def test_enter_on_a_session_offers_restart_or_open_folder_and_left_goes_back(epic_board):
+def test_enter_on_a_session_offers_resume_or_session_folder_buttons_and_esc_goes_back(epic_board):
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "session:")
         await pilot.press("enter")
         await pilot.pause()
         assert app.screen.__class__.__name__ == "SessionActions"
-        options = app.screen.query_one("#actions")
-        assert [str(options.get_option_at_index(n).prompt) for n in range(2)] == ["Restart", "Open session folder"]
-        await pilot.press("left")
+        assert [label for _, label in app.screen.BUTTONS] == ["Resume", "Session folder"]
+        assert app.screen.on == "resume"
+        await pilot.press("escape")
         await pilot.pause()
         assert app.screen.__class__.__name__ != "SessionActions" and app.focused is panel(app)
 
@@ -763,10 +772,9 @@ def test_restart_from_a_session_resumes_that_sessions_latest_task(epic_board):
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "session:claude")
-        await pilot.press("enter", "enter")  # Restart is the first choice
+        await pilot.press("enter", "enter")  # Resume is the first button
         await pilot.pause()
-        grads = next(i for i in core.load_db()["items"] if i["summary"] == "grads")
-        assert app.pick == str(grads["id"])
+        assert app.ran == [f"cd {epic_board['work']} && claude --resume aaaa1111-x"]
 
     drive(steps)
 
@@ -780,7 +788,7 @@ def test_open_session_folder_opens_that_sessions_working_folder(epic_board, monk
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "session:claude")
-        await pilot.press("enter", "down", "enter")
+        await pilot.press("enter", "right", "enter")
         await pilot.pause()
         assert opened == [str(epic_board["work"])]
 
@@ -797,7 +805,7 @@ def test_a_sessions_missing_folder_is_reported_not_opened(epic_board, monkeypatc
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "session:claude")
-        await pilot.press("enter", "down", "enter")
+        await pilot.press("enter", "right", "enter")
         await pilot.pause()
         assert opened == [] and app.is_running
 
@@ -1184,20 +1192,34 @@ def test_new_session_defaults_to_the_last_agent_and_folder_with_available_contex
         screen = app.screen
         assert screen.query_one("#agent").value == "copilot"  # the most recently worked session
         assert screen.query_one("#cwd").value == str(epic_board["docs"])
-        assert set(screen.query_one("#ctx").selected) == {"jobs", "sessions", "artifacts"}
+        assert set(screen.query_one("#ctx").selected) == {"tasks", "jobs", "sessions", "artifacts"}
 
     drive(steps)
 
 
-def test_ctrl_s_starts_the_session_with_the_chosen_context_and_prompt(epic_board):
+def test_ctrl_s_starts_the_session_inside_the_board_with_a_written_brief(epic_board):
     async def steps(app, pilot):
         await open_new_session(app, pilot)
         await pilot.press(*"go")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert app.launch["agent"] == "copilot" and app.launch["cwd"] == str(epic_board["docs"])
-        assert app.launch["prompt"].endswith("go") and "Child jobs:" in app.launch["prompt"]
-        assert app.launch["job_id"] == core.job_by_ref(core.load_db(), "ML-1")["id"]
+        assert app.screen.__class__.__name__ != "NewSession" and len(app.ran) == 1
+        item = core.load_db()["items"][-1]
+        assert (item["agent"], item["cwd"], item["summary"]) == ("copilot", str(epic_board["docs"]), "go")
+        assert item["job_id"] == core.job_by_ref(core.load_db(), "ML-1")["id"]
+        brief = Path(item["brief"]).read_text()
+        assert "## Child jobs" in brief and "Gradient check" in brief
+        assert f"copilot --session-id {item['session_id']}" in app.ran[0] and "## Your task" in app.ran[0]
+
+    drive(steps)
+
+
+def test_ctrl_j_starts_too_the_key_most_terminals_send_for_ctrl_enter(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        await pilot.press("ctrl+j")
+        await pilot.pause()
+        assert len(app.ran) == 1
 
     drive(steps)
 
@@ -1208,7 +1230,7 @@ def test_a_folder_that_does_not_exist_keeps_the_dialog_open(epic_board):
         app.screen.query_one("#cwd").value = "/no/such/place"
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert app.screen.__class__.__name__ == "NewSession" and app.launch is None
+        assert app.screen.__class__.__name__ == "NewSession" and app.ran == []
 
     drive(steps)
 
@@ -1218,50 +1240,118 @@ def test_escape_cancels_the_new_session(epic_board):
         await open_new_session(app, pilot)
         await pilot.press("escape")
         await pilot.pause()
-        assert app.launch is None and app.screen.__class__.__name__ != "NewSession"
+        assert app.ran == [] and app.screen.__class__.__name__ != "NewSession"
 
     drive(steps)
 
 
-def test_typing_a_path_suggests_folders_and_tab_completes_the_highlighted_one(epic_board):
+def completion(app):
+    return app.screen.query_one("#completion")
+
+
+def test_typing_a_path_floats_folder_suggestions_and_enter_takes_the_picked_one(epic_board):
     async def steps(app, pilot):
         await open_new_session(app, pilot)
         cwd = app.screen.query_one("#cwd")
         cwd.focus()
-        cwd.value = str(epic_board["docs"].parent) + "/wo"
         await pilot.pause()
-        folders = app.screen.query_one("#folders")
-        assert folders.display and folders.option_count == 1
-        await pilot.press("tab")
+        cwd.value = ""
+        await pilot.press(*(str(epic_board["docs"].parent) + "/"))
+        await pilot.pause()
+        box = completion(app)
+        assert box.display and box.owner is cwd
+        assert {str(epic_board["docs"]) + "/", str(epic_board["work"]) + "/"} <= set(box.values)
+        dialog = app.screen.query_one(".dialog").region
+        await pilot.press("w")
+        await pilot.pause()
+        assert box.values == [str(epic_board["work"]) + "/"]
+        await pilot.press("enter")
         assert cwd.value == str(epic_board["work"]) + "/"
+        assert app.screen.query_one(".dialog").region == dialog  # the box floats; the dialog never moves
 
     drive(steps)
 
 
-def test_tab_moves_on_when_there_is_nothing_to_complete(epic_board):
+def test_escape_hides_the_suggestions_before_it_cancels(epic_board):
     async def steps(app, pilot):
         await open_new_session(app, pilot)
-        before = app.focused
-        await pilot.press("tab")
-        assert app.focused is not before
+        cwd = app.screen.query_one("#cwd")
+        cwd.focus()
+        cwd.value = ""
+        await pilot.press("/")
+        await pilot.pause()
+        assert completion(app).display
+        await pilot.press("escape")
+        assert not completion(app).display and app.screen.__class__.__name__ == "NewSession"
 
     drive(steps)
 
 
-def test_a_slash_in_the_prompt_suggests_skills_and_tab_inserts_one(epic_board, monkeypatch, tmp_path):
-    skills = tmp_path / "home" / ".claude" / "skills" / "jq-repo-setup"
-    skills.mkdir(parents=True)
-    (skills / "SKILL.md").write_text("x")
+def test_a_slash_in_the_prompt_suggests_skills_and_arrows_pick_without_moving_the_cursor(epic_board, tmp_path):
+    for name in ("jq-clean-ui", "jq-repo-setup"):
+        skill = tmp_path / "home" / ".claude" / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("x")
 
     async def steps(app, pilot):
         await open_new_session(app, pilot)
         await pilot.press("f", "i", "x", " ", "/", "j", "q")
         await pilot.pause()
-        box = app.screen.query_one("#skills")
-        assert box.display and str(box.get_option_at_index(0).prompt) == "/jq-repo-setup"
-        await pilot.press("tab")
+        box = completion(app)
+        assert box.display and box.values == ["/jq-clean-ui", "/jq-repo-setup"]
+        await pilot.press("down", "enter")
         assert app.screen.query_one("#prompt").text == "fix /jq-repo-setup "
         assert not box.display
+
+    drive(steps)
+
+
+async def to_hand_over(app, pilot, key: str):
+    ctx = app.screen.query_one("#ctx")
+    ctx.focus()
+    await pilot.pause()
+    ctx.highlighted = [ctx.get_option_at_index(n).value for n in range(ctx.option_count)].index(key)
+    await pilot.pause()
+    return ctx
+
+
+def test_hand_over_previews_a_text_section_in_a_floating_box(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        await to_hand_over(app, pilot, "why")
+        assert app.screen.query_one("#peek-text").display and not app.screen.query_one("#peek-list").display
+
+    drive(steps)
+
+
+def test_hand_over_lists_child_jobs_and_unticking_all_of_them_drops_the_section(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        ctx = await to_hand_over(app, pilot, "jobs")
+        box = app.screen.query_one("#peek-list")
+        assert box.display and box.option_count == 1 and "Gradient check" in str(box.get_option_at_index(0).prompt)
+        await pilot.press("right")
+        assert app.focused is box
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.screen.picked["jobs"] == set() and "jobs" not in ctx.selected
+        await pilot.press("space")
+        await pilot.pause()
+        assert app.screen.picked["jobs"] and "jobs" in ctx.selected  # picking one hands the section over again
+        await pilot.press("left")
+        assert app.focused is ctx
+
+    drive(steps)
+
+
+def test_only_the_picked_artifacts_reach_the_brief(epic_board):
+    async def steps(app, pilot):
+        await open_new_session(app, pilot)
+        await to_hand_over(app, pilot, "artifacts")
+        await pilot.press("right", "space", "ctrl+s")
+        await pilot.pause()
+        brief = Path(core.load_db()["items"][-1]["brief"]).read_text()
+        assert "runbook" not in brief.lower()
 
     drive(steps)
 

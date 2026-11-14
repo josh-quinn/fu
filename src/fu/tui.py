@@ -764,29 +764,44 @@ def build_app():
         def action_close(self) -> None:
             self.dismiss(None)
 
+    def chips(options: list[tuple[str, str]], on: str) -> str:
+        """A row of buttons; the chosen one is lit."""
+        return "   ".join(f"[reverse b] {label} [/]" if key == on else f"[dim] {label} [/]" for key, label in options)
+
     class SessionActions(ModalScreen["str | None"]):
-        BINDINGS = [Binding("escape,left", "close", "Close")]
+        """Enter on a session: two buttons, Resume and Session folder. ← → choose, enter runs it, esc closes."""
+
+        AUTO_FOCUS = ""
+        BINDINGS = [
+            Binding("escape", "close", "Close"),
+            Binding("left", "pick(-1)", show=False),
+            Binding("right", "pick(1)", show=False),
+            Binding("enter", "choose", show=False),
+        ]
+        BUTTONS = [("resume", "Resume"), ("folder", "Session folder")]
 
         def __init__(self, label: str) -> None:
             super().__init__()
-            self.label = label
+            self.label, self.on = label, "resume"
 
         def compose(self) -> ComposeResult:
             with Vertical(classes="dialog"):
                 yield Label(f"[b]{escape(self.label)}[/]")
-                yield OptionList(
-                    Option("Restart", id="restart"), Option("Open session folder", id="folder"), id="actions"
-                )
-                yield Label("[dim]enter chooses · esc or ← closes[/]", classes="field")
+                yield Static(id="buttons", classes="field")
+                yield Label("[dim]← → choose · enter · esc closes[/]", classes="field")
 
         def on_mount(self) -> None:
-            opts = self.query_one(OptionList)
-            opts.highlighted = 0
-            opts.focus()
+            self.draw()
 
-        def on_option_list_option_selected(self, event) -> None:
-            event.stop()
-            self.dismiss(event.option.id)
+        def draw(self) -> None:
+            self.query_one("#buttons", Static).update(chips(self.BUTTONS, self.on))
+
+        def action_pick(self, step: int) -> None:
+            self.on = self.BUTTONS[1 if step > 0 else 0][0]
+            self.draw()
+
+        def action_choose(self) -> None:
+            self.dismiss(self.on)
 
         def action_close(self) -> None:
             self.dismiss(None)
@@ -815,7 +830,7 @@ def build_app():
             self.dismiss(None)
 
     class SessionChoice(ModalScreen["dict | None"]):
-        """The job already has sessions: ← → pick Restart or New Session, ↑ ↓ pick which session to restart."""
+        """The job already has sessions: ← → pick Restart or New Session; on Restart ↑ ↓ pick which one."""
 
         AUTO_FOCUS = ""  # keys are the screen's own; the list is only displayed
 
@@ -837,7 +852,7 @@ def build_app():
             with Vertical(classes="dialog"):
                 yield Static(id="choice")
                 yield OptionList(*[Option(line, id=tid) for tid, line in self.sessions], id="sessions")
-                yield Label("[dim]← → restart or new · ↑ ↓ session · enter · esc cancels[/]")
+                yield Label(id="hint")
 
         def on_mount(self) -> None:
             opts = self.query_one(OptionList)
@@ -846,10 +861,13 @@ def build_app():
             self.draw()
 
         def draw(self) -> None:
-            def chip(name: str, label: str) -> str:
-                return f"[reverse b] {label} [/]" if self.mode == name else f"[dim] {label} [/]"
-
-            self.query_one("#choice", Static).update(f"{chip('restart', 'Restart')}   {chip('new', 'New Session')}")
+            self.query_one("#choice", Static).update(chips([("restart", "Restart"), ("new", "New Session")], self.mode))
+            self.query_one("#sessions").display = self.mode == "restart"
+            self.query_one("#hint", Label).update(
+                "[dim]← → restart or new · ↑ ↓ session · enter · esc cancels[/]"
+                if self.mode == "restart"
+                else "[dim]← → restart or new · enter sets it up · esc cancels[/]"
+            )
 
         def action_pick(self, step: int) -> None:
             self.mode = "new" if step > 0 else "restart"
@@ -858,7 +876,7 @@ def build_app():
         def action_move(self, step: int) -> None:
             opts = self.query_one(OptionList)
             at = opts.highlighted or 0
-            if 0 <= at + step < opts.option_count:
+            if self.mode == "restart" and 0 <= at + step < opts.option_count:
                 opts.highlighted = at + step
 
         def action_choose(self) -> None:
@@ -871,104 +889,308 @@ def build_app():
         def action_cancel(self) -> None:
             self.dismiss(None)
 
-    class NewSession(ModalScreen["dict | None"]):
-        """Start a fresh session for a job: which agent, what context to hand over, a first prompt
-        (type /name for a skill) and the folder (type a path for live folder suggestions)."""
+    class Completion(OptionList):
+        """A Helix-style suggestion box that floats under the cursor of the field it serves, over
+        whatever is there, so nothing in the dialog moves. Each line is a value and a dim kind."""
 
-        BINDINGS = [
-            Binding("escape", "cancel", "Cancel"),
-            Binding("ctrl+s", "start", "Start"),
-            Binding("tab", "accept", show=False, priority=True),
-            Binding("ctrl+n", "next_hit", show=False, priority=True),
-            Binding("ctrl+p", "prev_hit", show=False, priority=True),
-        ]
+        MAX_ROWS = 10
 
-        def __init__(self, db: dict, job: dict, agent: str, cwd: str) -> None:
-            super().__init__()
-            self.db, self.job, self.agent, self.cwd = db, job, agent, cwd
-
-        def compose(self) -> ComposeResult:
-            have = launch.available(self.db, self.job)
-            with VerticalScroll(classes="dialog wide"):
-                yield Label(f"[b]New session[/] [dim]for {escape(self.job['name'])}[/]")
-                yield Label("Agent")
-                yield Select([(a, a) for a in AGENTS], value=self.agent, allow_blank=False, id="agent")
-                yield Label("Hand it" + ("" if have else "  [dim](nothing recorded for this job yet)[/]"))
-                yield SelectionList(*[(label, key, key in have) for key, label in launch.CONTEXT], id="ctx")
-                yield Label("Prompt  [dim]/ for skills · tab inserts · ctrl+n ctrl+p pick[/]")
-                yield TextArea("", id="prompt")
-                yield OptionList(id="skills")
-                yield Label("Where to start  [dim]type a path · tab completes · ctrl+n ctrl+p pick[/]")
-                yield Input(self.cwd, id="cwd")
-                yield OptionList(id="folders")
-                yield Label("[dim]ctrl+s starts the session · esc cancels[/]")
+        def __init__(self) -> None:
+            super().__init__(id="completion")
+            self.owner = None
+            self.values: list[str] = []
 
         def on_mount(self) -> None:
-            for sel in ("#skills", "#folders"):
-                box = self.query_one(sel, OptionList)
-                box.can_focus = False
-                box.display = False
-                box.styles.max_height = LIST_ROWS_TYPING
-            self.query_one("#prompt", TextArea).focus()
+            self.can_focus = False
+            self.display = False
 
-        # -- live suggestions
-        def hits(self) -> OptionList | None:
-            focus = self.focused
-            name = {"prompt": "#skills", "cwd": "#folders"}.get(getattr(focus, "id", None))
-            box = self.query_one(name, OptionList) if name else None
-            return box if box is not None and box.display and box.option_count else None
+        def open(self, owner, items: list[tuple[str, str]], back: int = 0) -> None:
+            """Show items under owner's cursor; `back` cells left so the list lines up with the word."""
+            if not items:
+                self.close()
+                return
+            self.owner, self.values = owner, [v for v, _ in items]
+            wide = min(70, max(len(v) for v, _ in items) + max(len(k) for _, k in items) + 6)
+            self.clear_options()
+            self.add_options([Option(Text.assemble(f" {v:<{wide - len(k) - 4}}", (k, "dim"), " ")) for v, k in items])
+            self.highlighted = 0
+            rows = min(self.MAX_ROWS, len(items))
+            self.styles.width, self.styles.height = wide, rows
+            cur, screen = owner.cursor_screen_offset, self.screen.size
+            x = max(0, min(cur.x - back - 1, screen.width - wide))
+            y = cur.y + 1 if cur.y + 1 + rows <= screen.height else max(0, cur.y - rows)
+            self.styles.offset = (x, y)
+            self.display = True
 
-        def show(self, box: OptionList, values: list[str]) -> None:
-            box.clear_options()
-            box.add_options([Option(v) for v in values])
-            box.display = bool(values)
-            box.highlighted = 0 if values else None
+        def close(self) -> None:
+            self.display = False
+            self.owner = None
 
-        def skill_word(self) -> tuple[str, int, int, int] | None:
-            area = self.query_one("#prompt", TextArea)
-            row, col = area.cursor_location
-            before = area.document.get_line(row)[:col]
+        def move(self, step: int) -> None:
+            if self.highlighted is not None:
+                self.highlighted = max(0, min(self.option_count - 1, self.highlighted + step))
+
+        def current(self) -> str | None:
+            return self.values[self.highlighted] if self.display and self.highlighted is not None else None
+
+    class Completing:
+        """For an Input or TextArea with a Completion box: while it shows, ↑ ↓ pick, tab or enter take
+        the pick and esc hides the box; otherwise the keys do what they always do."""
+
+        def popup(self) -> "Completion | None":
+            box = next(iter(self.screen.query(Completion)), None)
+            return box if box is not None and box.display and box.owner is self else None
+
+        def on_key(self, event) -> None:
+            box = self.popup()
+            if box is None:
+                return
+            if event.key in ("up", "down"):
+                box.move(-1 if event.key == "up" else 1)
+            elif event.key in ("tab", "enter"):
+                self.take(box.current())
+            elif event.key == "escape":
+                box.close()
+            else:
+                return
+            event.prevent_default()
+            event.stop()
+
+        def on_blur(self) -> None:
+            if (box := self.popup()) is not None:
+                box.close()
+
+        def suggest_now(self) -> None:
+            pass
+
+        def take(self, value: str | None) -> None:
+            pass
+
+    class PathInput(Completing, Input):
+        """A path box: typing lists matching folders (and files, if asked) under the cursor."""
+
+        def __init__(self, value: str = "", files: bool = False, **kw) -> None:
+            super().__init__(value, select_on_focus=False, **kw)
+            self.files = files
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if self.has_focus:
+                self.suggest_now()
+
+        def suggest_now(self) -> None:
+            box = self.screen.query_one(Completion)
+            typed = self.value
+            box.open(self, launch.path_suggestions(typed, files=self.files), back=len(typed.rpartition("/")[2]))
+
+        def take(self, value: str | None) -> None:
+            if value is None:
+                return
+            self.value = value
+            self.cursor_position = len(value)
+            if not value.endswith("/"):
+                self.screen.query_one(Completion).close()
+
+    class PickInput(Completing, Input):
+        """A box that searches a fixed list of choices (value, kind) as you type."""
+
+        def __init__(self, value: str, choices, **kw) -> None:
+            super().__init__(value, select_on_focus=False, **kw)
+            self.choices = choices
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if self.has_focus:
+                self.suggest_now()
+
+        def on_focus(self) -> None:
+            self.suggest_now()
+
+        def suggest_now(self) -> None:
+            low = self.value.strip().lower()
+            hits = [c for c in self.choices() if low in f"{c[0]} {c[1]}".lower()]
+            self.screen.query_one(Completion).open(self, hits, back=self.cursor_position)
+
+        def take(self, value: str | None) -> None:
+            if value is None:
+                return
+            self.value = value
+            self.cursor_position = len(value)
+            self.screen.query_one(Completion).close()
+
+    class PromptArea(Completing, TextArea):
+        """The first prompt: a word starting with / lists matching skills under the cursor."""
+
+        def word(self) -> tuple[str, int, int, int] | None:
+            row, col = self.cursor_location
+            before = self.document.get_line(row)[:col]
             word = before.rsplit(None, 1)[-1] if before.strip() and not before[-1:].isspace() else ""
             return (word, row, col - len(word), col) if word.startswith("/") else None
 
         def on_text_area_changed(self, event: TextArea.Changed) -> None:
-            word = self.skill_word()
-            self.show(self.query_one("#skills", OptionList), launch.skill_suggestions(word[0]) if word else [])
+            if self.has_focus:
+                self.suggest_now()
 
-        def on_input_changed(self, event: Input.Changed) -> None:
-            if event.input.id == "cwd":
-                self.show(self.query_one("#folders", OptionList), launch.folder_suggestions(event.value))
+        def suggest_now(self) -> None:
+            box = self.screen.query_one(Completion)
+            word = self.word()
+            if word:
+                box.open(self, launch.skill_suggestions(word[0]), back=len(word[0]))
+            else:
+                box.close()
+
+        def take(self, value: str | None) -> None:
+            word = self.word()
+            if value and word:
+                self.replace(value + " ", (word[1], word[2]), (word[1], word[3]))
+            self.screen.query_one(Completion).close()
+
+    class NewSession(ModalScreen["dict | None"]):
+        """Start a fresh session for a job: the agent, what to hand over (each section previews what it
+        holds, and list sections let you pick entries), a first prompt (/ for skills) and the folder."""
+
+        BINDINGS = [
+            Binding("escape", "cancel", "Cancel"),
+            Binding("ctrl+enter,ctrl+j,ctrl+s", "start", "Start", priority=True),
+            Binding("right", "into_peek", show=False),
+            Binding("left", "out_of_peek", show=False),
+        ]
+
+        def __init__(self, db: dict, job: dict, agent: str) -> None:
+            super().__init__()
+            self.db, self.job, self.agent = db, job, agent
+            self.have = launch.available(db, job)
+            self.lists = {k: launch.entries(db, job, k) for k in launch.LISTS}
+            self.picked = {k: {i for i, _ in v} for k, v in self.lists.items()}
+            self.peeking: str | None = None  # the section the preview box shows
+            self.cwd_edited = False
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="frame"), VerticalScroll(classes="dialog wide"):
+                yield Label(f"[b]New session[/] [dim]for {escape(job_label(self.job))} {escape(self.job['name'])}[/]")
+                with Vertical(classes="section"):
+                    yield Label("Agent", classes="section-label")
+                    yield Select([(a, a) for a in AGENTS], value=self.agent, allow_blank=False, id="agent")
+                with Vertical(classes="section"):
+                    yield Label(
+                        "Hand over  [dim]space ticks · → picks entries[/]"
+                        + ("" if self.have else "  [dim](nothing recorded for this job yet)[/]"),
+                        classes="section-label",
+                    )
+                    yield SelectionList(
+                        *[(self.ctx_label(k, label), k, k in self.have) for k, label in launch.CONTEXT], id="ctx"
+                    )
+                with Vertical(classes="section"):
+                    yield Label(
+                        "Prompt  [dim]/ for skills · empty: it sums up the job and waits[/]", classes="section-label"
+                    )
+                    yield PromptArea("", id="prompt")
+                with Vertical(classes="section"):
+                    yield Label("Start session from", classes="section-label")
+                    yield PathInput(launch.home(self.default_folder()), id="cwd")
+                yield Label("[dim]ctrl+enter starts the session · esc cancels[/]", classes="field")
+            yield Static(id="peek-text", classes="peek")
+            yield SelectionList(id="peek-list", classes="peek")
+            yield Completion()
+
+        def ctx_label(self, key: str, label: str) -> str:
+            n = len(self.lists.get(key, []))
+            return f"{label} ({n})" if key in launch.LISTS else label
+
+        def on_mount(self) -> None:
+            for peek in self.query(".peek"):
+                peek.display = False
+                peek.can_focus = False
+            self.query_one("#prompt", PromptArea).focus()
+
+        def default_folder(self) -> str:
+            include = list(self.query_one("#ctx", SelectionList).selected) if self.is_mounted else self.have
+            return launch.default_folder(self.db, self.job, include) or os.getcwd()
+
+        # -- the preview box beside "Hand over"
+        def on_selection_list_selection_highlighted(self, event) -> None:
+            if event.selection_list.id == "ctx":
+                self.peek(event.selection.value)
+
+        def on_descendant_focus(self, event) -> None:
+            focused = getattr(event, "widget", None) or self.focused
+            if getattr(focused, "id", None) == "ctx":
+                ctx = self.query_one("#ctx", SelectionList)
+                if ctx.highlighted is not None:
+                    self.peek(ctx.get_option_at_index(ctx.highlighted).value)
+            elif getattr(focused, "id", None) != "peek-list":
+                self.hide_peek()
+            if getattr(focused, "id", None) != "peek-list":
+                self.query_one("#peek-list").can_focus = False  # only → enters it; Tab passes it by
+
+        def hide_peek(self) -> None:
+            self.peeking = None
+            for peek in self.query(".peek"):
+                peek.display = False
+
+        def peek(self, key: str) -> None:
+            self.peeking = key
+            ctx = self.query_one("#ctx", SelectionList)
+            text, box = self.query_one("#peek-text", Static), self.query_one("#peek-list", SelectionList)
+            x = ctx.region.x + 26
+            width = max(30, min(70, self.size.width - x - 2))
+            y = ctx.region.y + (ctx.highlighted or 0)
+            if key in launch.LISTS:
+                text.display = False
+                box.clear_options()
+                rows = self.lists[key]
+                if not rows:
+                    box.display = False
+                    text.update(Text("nothing yet", style="dim"))
+                    text.display = True
+                    text.styles.offset, text.styles.width = (x, y), width
+                    return
+                box.add_options(
+                    [(Text(clip(line, width - 8)), ident, ident in self.picked[key]) for ident, line in rows]
+                )
+                box.styles.offset, box.styles.width = (x, y), width
+                box.styles.height = min(10, len(rows)) + 2
+                box.border_title = (
+                    "what each did; its transcript is read only if needed" if key == "sessions" else "→ to pick"
+                )
+                box.display = True
+            else:
+                box.display = False
+                text.update(Text(launch.preview(self.db, self.job, key)))
+                text.styles.offset, text.styles.width = (x, y), width
+                text.display = True
+
+        def action_into_peek(self) -> None:
+            box = self.query_one("#peek-list", SelectionList)
+            if getattr(self.focused, "id", None) == "ctx" and box.display:
+                box.can_focus = True
+                box.focus()
+                box.highlighted = 0
+
+        def action_out_of_peek(self) -> None:
+            if getattr(self.focused, "id", None) == "peek-list":
+                self.query_one("#ctx", SelectionList).focus()
 
         def check_action(self, action: str, parameters: tuple) -> bool | None:
-            if action in ("next_hit", "prev_hit"):
-                return self.hits() is not None
+            if action == "into_peek":
+                return getattr(self.focused, "id", None) == "ctx"
+            if action == "out_of_peek":
+                return getattr(self.focused, "id", None) == "peek-list"
             return True
 
-        def action_next_hit(self) -> None:
-            box = self.hits()
-            if box and (box.highlighted or 0) + 1 < box.option_count:
-                box.highlighted = (box.highlighted or 0) + 1
+        def on_selection_list_selected_changed(self, event) -> None:
+            if event.selection_list.id == "peek-list" and self.peeking in launch.LISTS:
+                chosen = set(event.selection_list.selected)
+                self.picked[self.peeking] = chosen
+                ctx = self.query_one("#ctx", SelectionList)
+                if chosen:
+                    ctx.select(self.peeking)  # picking an entry hands the section over
+                else:
+                    ctx.deselect(self.peeking)
+            elif event.selection_list.id == "ctx" and not self.cwd_edited:
+                self.query_one("#cwd", PathInput).value = launch.home(self.default_folder())
 
-        def action_prev_hit(self) -> None:
-            box = self.hits()
-            if box and (box.highlighted or 0) > 0:
-                box.highlighted -= 1
-
-        def action_accept(self) -> None:
-            box = self.hits()
-            if not box:
-                self.focus_next()  # nothing to complete: Tab moves on as usual
-                return
-            value = str(box.get_option_at_index(box.highlighted or 0).prompt)
-            if box.id == "folders":
-                field = self.query_one("#cwd", Input)
-                field.value = value
-                field.cursor_position = len(value)
-            else:
-                word = self.skill_word()
-                area = self.query_one("#prompt", TextArea)
-                if word:
-                    area.replace(value + " ", (word[1], word[2]), (word[1], word[3]))
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id == "cwd" and event.input.has_focus:
+                self.cwd_edited = True
 
         # -- finish
         def action_start(self) -> None:
@@ -981,12 +1203,16 @@ def build_app():
                     "agent": self.query_one("#agent", Select).value,
                     "cwd": str(cwd),
                     "include": list(self.query_one("#ctx", SelectionList).selected),
+                    "picked": {k: sorted(v) for k, v in self.picked.items()},
                     "prompt": self.query_one("#prompt", TextArea).text,
                 }
             )
 
         def action_cancel(self) -> None:
-            self.dismiss(None)
+            if getattr(self.focused, "id", None) == "peek-list":
+                self.query_one("#ctx", SelectionList).focus()
+            else:
+                self.dismiss(None)
 
     class HeaderTable(DataTable):
         """Up from the first row steps onto the column headers; there the arrows pick a
@@ -1104,7 +1330,16 @@ def build_app():
         .popup OptionList { height: auto; border: none; padding: 0; background: $surface; }
         #notes-text { height: 10; }
         #prompt { height: 6; }
-        #ctx { height: 8; }
+        #ctx { height: 9; }
+        .section { height: auto; margin-top: 1; padding-left: 1; border-left: blank; }
+        .section:focus-within { border-left: outer $accent; }
+        .section-label { color: $text-muted; }
+        .section:focus-within > .section-label { color: $accent; text-style: bold; }
+        .frame { width: 100%; height: 100%; align: center middle; }  /* floating boxes never move the dialog */
+        #completion { overlay: screen; position: absolute; background: $panel; border: none; padding: 0;
+                      scrollbar-size-vertical: 1; }
+        .peek { overlay: screen; position: absolute; height: auto; max-height: 14; padding: 0 1;
+                background: $panel; border: round $accent; }
         #jobs-detail { background: $background; border: none; border-left: solid $primary 40%; padding: 1 1; }
         #jobs-detail > .option-list--option-disabled { color: $text; }
         .row { height: 1; padding: 0 1; background: $boost; }
@@ -1125,11 +1360,10 @@ def build_app():
             self.filters: dict = {}
             self.jfilters: dict = {}  # Jobs board: column -> filter
             self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
-            self.launch: dict | None = None  # a new session to start once the TUI has exited
             self.panel_shown = True  # the detail / summary panel beside the table (shift+. toggles it)
             self.col: int | None = None  # Jobs column under column mode (Enter on a row), None outside it
             self.shown_job: int | None = None  # whose summary the panel currently shows
-            self.pick: str | None = None
+            self.runner = self.run_suspended  # tests swap this for a recorder
 
         # ---- layout
         def compose(self) -> ComposeResult:
@@ -1476,15 +1710,31 @@ def build_app():
 
             self.push_screen(NotesForm(job.get("notes", "")), done)
 
+        # ---- running sessions: the board steps aside while the agent runs, then comes back
+        def run_suspended(self, cmd: str) -> None:
+            import subprocess
+
+            with self.suspend():
+                subprocess.run(["/bin/sh", "-c", cmd], check=False)  # noqa: S603 - our own command, built with shlex
+
+        def run_session(self, cmd: str | None) -> None:
+            if not cmd:
+                self.notify("No session id stored for this item", severity="warning")
+                return
+            self.runner(cmd)
+            self.reload()
+
+        def resume(self, item_id: str) -> None:
+            self.run_session(launch.prepare_resume(item_id))
+
         def session_actions(self, job: dict, key: str) -> None:
             item = summary.session_target(self.db, job, key)
             if not item:
                 return
 
             def done(choice: str | None) -> None:
-                if choice == "restart":
-                    self.pick = str(item["id"])
-                    self.exit()
+                if choice == "resume":
+                    self.resume(str(item["id"]))
                 elif choice == "folder":
                     cwd = item.get("cwd")
                     if not cwd or not Path(cwd).is_dir():
@@ -1519,15 +1769,13 @@ def build_app():
 
             def done(yes: bool | None) -> None:
                 if yes:
-                    self.pick = str(item["id"])
-                    self.exit()
+                    self.resume(str(item["id"]))
 
             self.push_screen(Confirm(f"Restart session?\n{item['agent']} · {item['summary']}"), done)
 
         def resume_item(self, item: dict | None) -> None:
             if item and resume_cmd(item):
-                self.pick = str(item["id"])
-                self.exit()
+                self.resume(str(item["id"]))
             elif item:
                 self.notify("No session id stored for this item", severity="warning")
 
@@ -1708,32 +1956,23 @@ def build_app():
                 if v.get("new"):
                     self.new_session(job)
                 else:
-                    self.pick = v["restart"]
-                    self.exit()
+                    self.resume(v["restart"])
 
             self.push_screen(SessionChoice(choices), chosen)
 
         def new_session(self, job: dict) -> None:
-            """Ask how to start a session for the job, then exit so the CLI can run it."""
-            items = sorted(
-                (i for i in self.db["items"] if i.get("job_id") == job["id"] and i.get("cwd")),
+            """Ask how to start a session for the job, then run it while the board waits."""
+            last = max(
+                (i for i in self.db["items"] if i.get("job_id") == job["id"] and i.get("agent")),
                 key=lambda i: (i["last_worked"], i["id"]),
-                reverse=True,
+                default=None,
             )
-            last = items[0] if items else None
 
             def started(v: dict | None) -> None:
                 if v:
-                    db = load_db()
-                    fresh = next(j for j in db["jobs"] if j["id"] == job["id"])
-                    prompt = launch.full_prompt(db, fresh, v["include"], v["prompt"])
-                    self.launch = {"job_id": job["id"], "agent": v["agent"], "cwd": v["cwd"], "prompt": prompt}
-                    self.exit()
+                    self.run_session(launch.prepare({**v, "job_id": job["id"]}))
 
-            self.push_screen(
-                NewSession(self.db, job, last["agent"] if last else AGENTS[0], last["cwd"] if last else os.getcwd()),
-                started,
-            )
+            self.push_screen(NewSession(self.db, job, last["agent"] if last else AGENTS[0]), started)
 
         def action_help(self) -> None:
             self.push_screen(Help())
@@ -1925,8 +2164,6 @@ def build_app():
     return Board()
 
 
-def run_tui() -> "str | dict | None":
-    """Run the board; returns the id to resume, or a spec for a new session, if the user picked one."""
-    app = build_app()
-    app.run()
-    return app.launch or app.pick
+def run_tui() -> None:
+    """Run the board. Sessions started from it run inside it, and the board comes back when they end."""
+    build_app().run()

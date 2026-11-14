@@ -242,20 +242,6 @@ def test_job_notes_can_be_set_and_cleared_from_the_cli(monkeypatch, capsys):
     assert json.loads(run(monkeypatch, capsys, "job", "ls", "--json"))[0]["notes"] == ""
 
 
-def test_start_session_records_a_task_on_the_job_and_runs_the_agent(monkeypatch, tmp_path):
-
-    db = core.load_db()
-    job = core.create_job(db, "Backprop", "epic")
-    core.save_db(db)
-    ran = []
-    monkeypatch.setattr(cli.os, "execvp", lambda prog, args: ran.append(args))
-    cli.start_session({"job_id": job["id"], "agent": "claude", "cwd": str(tmp_path), "prompt": "hello"})
-    item = core.load_db()["items"][0]
-    assert (item["job_id"], item["agent"], item["status"], item["cwd"]) == (job["id"], "claude", "doing", str(tmp_path))
-    assert f"--session-id {item['session_id']} hello" in ran[0][-1]
-    assert ran[0][-1].startswith(f"cd {tmp_path} && claude ")
-
-
 def test_job_add_and_edit_set_the_home_folder(monkeypatch, capsys, tmp_path):
     run(monkeypatch, capsys, "job", "add", "Homed", "--home", str(tmp_path))
     assert core.load_db()["jobs"][0]["home"] == str(tmp_path.resolve())

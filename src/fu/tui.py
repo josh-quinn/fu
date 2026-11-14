@@ -4,7 +4,7 @@ import os
 from datetime import date
 from pathlib import Path
 
-from fu import artifacts, launch, summary
+from fu import artifacts, config, launch, summary
 from fu.core import (
     AGENTS,
     DATE_COLUMNS,
@@ -29,11 +29,14 @@ from fu.core import (
     job_name,
     job_resume_item,
     job_rows,
+    job_types,
     key_modifier,
     load_db,
     matches,
     new_item,
+    project_of,
     range_options,
+    remember_type,
     remove_job,
     resume_cmd,
     save_db,
@@ -55,8 +58,8 @@ JOB_COLUMNS_UI = [
     ("added", "Added"),
     ("last_worked", "Last worked"),
 ]
+OTHER = "Other…"  # the last choice of a dropdown that lets you type your own
 ORANGE = "#ffa62b"  # the cursor colour: the highlighted row, and the header picked on the headers or in column mode
-COLUMN_TINT = "on grey19"  # background of the column picked in column mode
 HEADER_PICKED = f"bold black on {ORANGE}"
 LIST_ROWS_TYPING = 6
 LIST_ROWS_EMPTY = 15
@@ -248,7 +251,8 @@ def build_app():
         """Rows you move through with the arrows. Enter edits a row, Enter again leaves it.
 
         FIELDS are (key, label, mode); mode is "text", "readonly" (greyed, skipped by the arrows), a
-        tuple of options (a dropdown), "job" (searchable list of jobs) or "folder" (path with suggestions).
+        tuple of options (a dropdown; an "Other…" option there lets you type your own), "job" or
+        "project" (searchable lists) or "folder" (path with suggestions).
         """
 
         BINDINGS = [
@@ -263,14 +267,19 @@ def build_app():
         def __init__(self, heading: str, values: dict | None = None, jobs: list[tuple[str, str]] | None = None) -> None:
             super().__init__()
             self.heading = heading
-            self.vals = {k: str((values or {}).get(k) or "") for k, _, _ in self.FIELDS}
+            self.fields = self.make_fields()
+            self.vals = {k: str((values or {}).get(k) or "") for k, _, _ in self.fields}
             self.jobs = jobs or []  # (label, name) the "job" fields choose from
+            self.projects: list[tuple[str, str]] = []  # (key, where it comes from) for "project" fields
             self.editing: str | None = None
+
+        def make_fields(self) -> list[tuple[str, str, object]]:
+            return list(self.FIELDS)
 
         def compose(self) -> ComposeResult:
             with Vertical(classes="frame"), Vertical(classes="dialog"):
                 yield Label(f"[b]{self.heading}[/]")
-                for key, label, mode in self.FIELDS:
+                for key, label, mode in self.fields:
                     yield Label(
                         label + (" [dim](set by the session)[/]" if mode == "readonly" else ""), classes="field"
                     )
@@ -282,10 +291,14 @@ def build_app():
                             allow_blank=False,
                             id=f"edit-{key}",
                         )
+                        if OTHER in mode:
+                            yield Input(placeholder="name your own and press enter", id=f"other-{key}")
                     elif mode == "text":
                         yield Input(value=self.vals[key], id=f"edit-{key}")
                     elif mode == "job":
                         yield PickInput(self.vals[key], lambda: self.jobs, id=f"edit-{key}")
+                    elif mode == "project":
+                        yield PickInput(self.vals[key], lambda: self.projects, id=f"edit-{key}")
                     elif mode == "folder":
                         yield PathInput(self.vals[key], id=f"edit-{key}")
                 yield Label("[dim]↑↓ move · enter edit / confirm · ctrl+s save · esc back[/]", classes="field")
@@ -294,15 +307,15 @@ def build_app():
         def on_mount(self) -> None:
             for editor in self.query(".dialog Input, .dialog Select"):
                 editor.display = False
-            for key, _, mode in self.FIELDS:
+            for key, _, mode in self.fields:
                 self.query_one(f"#row-{key}", FieldRow).can_focus = mode != "readonly"
-            first = next((k for k, _, m in self.FIELDS if m != "readonly"), None)
+            first = next((k for k, _, m in self.fields if m != "readonly"), None)
             if first:
                 self.query_one(f"#row-{first}").focus()
 
         def shown(self, key: str) -> str:
             value = self.vals[key]
-            name = dict(self.jobs).get(value) if {k: m for k, _, m in self.FIELDS}[key] == "job" else None
+            name = dict(self.jobs).get(value) if {k: m for k, _, m in self.fields}[key] == "job" else None
             return (escape(value) + (f"  [dim]{escape(name)}[/]" if name else "")) if value else "[dim]-[/]"
 
         def rows(self) -> list:
@@ -334,22 +347,44 @@ def build_app():
             if key is None:
                 return
             editor = self.query_one(f"#edit-{key}")
-            if keep and editor.value is not Select.BLANK:
+            if keep and editor.value is not Select.BLANK and editor.value != OTHER:
                 self.vals[key] = str(editor.value).strip()
             self.editing = None
             editor.display = False
+            for other in self.query(f"#other-{key}"):
+                other.display = False
             row = self.query_one(f"#row-{key}", FieldRow)
             row.update(self.shown(key))
             row.display = True
             row.focus()
+            self.changed(key)
+
+        def changed(self, key: str) -> None:
+            """A field's value was set; subclasses react (a type's template fills the description)."""
+
+        def set_row(self, key: str, value: str) -> None:
+            self.vals[key] = value
+            self.query_one(f"#row-{key}", FieldRow).update(self.shown(key))
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
+            if event.input.id and event.input.id.startswith("other-") and self.editing:
+                if event.value.strip():
+                    self.vals[self.editing] = event.value.strip()
+                self.leave_edit(keep=False)
+                return
             self.leave_edit(keep=True)
 
         def on_select_changed(self, event: Select.Changed) -> None:
             event.stop()
             if self.editing and event.select.id == f"edit-{self.editing}":
+                if event.value == OTHER:  # type your own instead
+                    event.select.display = False
+                    other = self.query_one(f"#other-{self.editing}", Input)
+                    other.display = True
+                    other.value = ""
+                    other.focus()
+                    return
                 self.leave_edit(keep=True)
 
         def validate(self, values: dict) -> str | None:
@@ -357,7 +392,7 @@ def build_app():
 
         def action_save(self) -> None:
             self.leave_edit(keep=True)
-            editable = {k: self.vals[k] for k, _, m in self.FIELDS if m != "readonly"}
+            editable = {k: self.vals[k] for k, _, m in self.fields if m != "readonly"}
             problem = self.validate(editable)
             if problem:
                 self.notify(problem, severity="error")
@@ -384,14 +419,38 @@ def build_app():
             return None if v["summary"] else "Summary is required"
 
     class JobForm(RowForm):
-        FIELDS = [
-            ("name", "Title", "text"),
-            ("ext_id", "ID (optional, e.g. a Jira key)", "text"),
-            ("kind", "Type", tuple(KINDS)),
-            ("parent", "Parent job (type to search; blank for none)", "job"),
-            ("home", "Home folder (new sessions start here)", "folder"),
-            ("description", "Description", "text"),
-        ]
+        """Title, Jira ID, Type (the list, or Other… for your own), Parent, Project, Home folder and
+        Description. Picking a type fills an empty description from that type's template."""
+
+        def __init__(
+            self,
+            heading: str,
+            values: dict | None = None,
+            jobs: list[tuple[str, str]] | None = None,
+            types: list[str] | None = None,
+            projects: list[tuple[str, str]] | None = None,
+            templates: dict | None = None,
+        ) -> None:
+            self.types = types or list(KINDS)
+            super().__init__(heading, values, jobs)
+            self.projects = projects or []
+            self.templates = templates or {}
+
+        def make_fields(self) -> list[tuple[str, str, object]]:
+            return [
+                ("name", "Title", "text"),
+                ("ext_id", "Jira ID (optional; sets the project)", "text"),
+                ("kind", "Type", (*self.types, OTHER)),
+                ("parent", "Parent job (type to search; blank for none)", "job"),
+                ("project", "Project (when there is no Jira ID; type to search or name a new one)", "project"),
+                ("home", "Home folder (new sessions start here)", "folder"),
+                ("description", "Description", "text"),
+            ]
+
+        def changed(self, key: str) -> None:
+            template = self.templates.get(self.vals["kind"])
+            if key == "kind" and template and not self.vals["description"]:
+                self.set_row("description", str(template))
 
         def validate(self, v: dict) -> str | None:
             return None if v["name"] else "Title is required"
@@ -719,8 +778,8 @@ def build_app():
         """A row of buttons; the chosen one is lit."""
         return "   ".join(f"[reverse b] {label} [/]" if key == on else f"[dim] {label} [/]" for key, label in options)
 
-    class SessionActions(ModalScreen["str | None"]):
-        """Enter on a session: two buttons, Resume and Session folder. ← → choose, enter runs it, esc closes."""
+    class Buttons(ModalScreen["str | None"]):
+        """A row of buttons: ← → choose, enter presses it, esc closes. Returns the button's key."""
 
         AUTO_FOCUS = ""
         BINDINGS = [
@@ -729,15 +788,17 @@ def build_app():
             Binding("right", "pick(1)", show=False),
             Binding("enter", "choose", show=False),
         ]
-        BUTTONS = [("resume", "Resume"), ("folder", "Session folder")]
 
-        def __init__(self, label: str) -> None:
+        def __init__(self, label: str, buttons: list[tuple[str, str]], hint: str = "") -> None:
             super().__init__()
-            self.label, self.on = label, "resume"
+            self.label, self.buttons, self.hint = label, buttons, hint
+            self.on = buttons[0][0]
 
         def compose(self) -> ComposeResult:
             with Vertical(classes="dialog"):
                 yield Label(f"[b]{escape(self.label)}[/]")
+                if self.hint:
+                    yield Label(f"[dim]{escape(self.hint)}[/]")
                 yield Static(id="buttons", classes="field")
                 yield Label("[dim]← → choose · enter · esc closes[/]", classes="field")
 
@@ -745,10 +806,11 @@ def build_app():
             self.draw()
 
         def draw(self) -> None:
-            self.query_one("#buttons", Static).update(chips(self.BUTTONS, self.on))
+            self.query_one("#buttons", Static).update(chips(self.buttons, self.on))
 
         def action_pick(self, step: int) -> None:
-            self.on = self.BUTTONS[1 if step > 0 else 0][0]
+            keys = [k for k, _ in self.buttons]
+            self.on = keys[max(0, min(len(keys) - 1, keys.index(self.on) + step))]
             self.draw()
 
         def action_choose(self) -> None:
@@ -758,26 +820,35 @@ def build_app():
             self.dismiss(None)
 
     class NotesForm(ModalScreen["str | None"]):
+        """Free text (notes, or a why). Leaving without saving keeps a draft until fu closes, so the
+        text comes back next time; ctrl+s saves it for good."""
+
         BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
 
-        def __init__(self, text: str) -> None:
+        def __init__(self, text: str, title: str = "Notes", draft_key: tuple | None = None) -> None:
             super().__init__()
-            self.text = text
+            self.text, self.title_text, self.draft_key = text, title, draft_key
 
         def compose(self) -> ComposeResult:
             with Vertical(classes="dialog wide"):
-                yield Label("[b]Notes[/] [dim]ctrl+s saves · esc cancels[/]")
-                yield TextArea(self.text, id="notes-text")
+                yield Label(f"[b]{escape(self.title_text)}[/] [dim]ctrl+s saves · esc keeps a draft[/]")
+                yield TextArea(self.app.drafts.get(self.draft_key, self.text), id="notes-text")
 
         def on_mount(self) -> None:
             area = self.query_one(TextArea)
             area.focus()
             area.move_cursor(area.document.end)
+            if self.draft_key in self.app.drafts:
+                self.notify("Your unsaved draft is back")
 
         def action_save(self) -> None:
+            self.app.drafts.pop(self.draft_key, None)
             self.dismiss(self.query_one(TextArea).text.strip())
 
         def action_cancel(self) -> None:
+            text = self.query_one(TextArea).text
+            if self.draft_key is not None and text.strip() != self.text.strip():
+                self.app.drafts[self.draft_key] = text
             self.dismiss(None)
 
     class SessionChoice(ModalScreen["dict | None"]):
@@ -1166,25 +1237,23 @@ def build_app():
                 self.dismiss(None)
 
     class ArtifactList(ModalScreen[None]):
-        """What a job's sessions left behind. Enter opens one; x hides a wrong guess (it moves to Hidden,
-        where x brings it back); ctrl+z undoes the last change; a adds a file or folder by hand."""
+        """A job's outputs: the documents, skills and repos its sessions made. Enter opens one, a adds
+        a file or folder by hand, x removes one after asking."""
 
         BINDINGS = [
             Binding("escape", "close", "Close"),
-            Binding("x", "toggle_hidden", "Hide / bring back"),
+            Binding("x", "remove", "Remove"),
             Binding("a", "add", "Add"),
-            Binding("ctrl+z", "undo", "Undo"),
         ]
 
         def __init__(self, ops: dict) -> None:
             super().__init__()
-            self.ops = ops  # list() -> (artifacts, hidden paths); hide, restore, add, remove (path)
-            self.rows: list[tuple[str, str]] = []  # (state, path) behind each line; state: live | hidden
-            self.undo: list[tuple[str, str]] = []  # (op that reverses it, path)
+            self.ops = ops  # list() -> outputs; add(path); remove(path)
+            self.paths: list[str] = []  # the path behind each line ('' for the empty-state line)
 
         def compose(self) -> ComposeResult:
             with Vertical(classes="frame"), Vertical(classes="dialog wide"):
-                yield Label("[b]Artifacts[/] [dim]enter opens · x hides or brings back · a adds · ctrl+z undo[/]")
+                yield Label("[b]Outputs[/] [dim]enter opens · a adds · x removes · esc closes[/]")
                 yield OptionList(id="arts")
                 yield Label("Add a file or folder", id="add-label", classes="field")
                 yield PathInput("", files=True, id="add-path")
@@ -1196,71 +1265,51 @@ def build_app():
             self.fill()
             self.query_one(OptionList).focus()
 
-        def fill(self, at: int | None = None) -> None:
+        def fill(self, at: int = 0) -> None:
             opts = self.query_one("#arts", OptionList)
             opts.clear_options()
-            live, hidden = self.ops["list"]()
             home = str(Path.home())
-            self.rows = []
-            options = []
-            for a in live:
-                self.rows.append(("live", a["path"]))
-                options.append(
-                    Option(
-                        Text.from_markup(
-                            f"{a['kind']:<6} [b]{escape(a['label'])}[/]  [dim]{escape(a['path'].replace(home, '~'))}[/]"
+            outputs = self.ops["list"]()
+            self.paths = [a["path"] for a in outputs]
+            if outputs:
+                opts.add_options(
+                    [
+                        Option(
+                            Text.from_markup(
+                                f"{a['kind']:<6} [b]{escape(a['label'])}[/]  "
+                                f"[dim]{escape(a['path'].replace(home, '~'))}[/]"
+                            )
                         )
-                    )
+                        for a in outputs
+                    ]
                 )
-            if not live:
-                self.rows.append(("none", ""))
-                options.append(Option(Text("No artifacts yet. a adds one.", style="dim"), disabled=True))
-            if hidden:
-                self.rows.append(("none", ""))
-                options.append(
-                    Option(Text(f"\nHidden ({len(hidden)})  x brings one back", style="dim bold"), disabled=True)
-                )
-                for path in hidden:
-                    self.rows.append(("hidden", path))
-                    options.append(Option(Text(f"       {path.replace(home, '~')}", style="dim")))
-            opts.add_options(options)
-            pickable = [n for n, (state, _) in enumerate(self.rows) if state != "none"]
-            opts.highlighted = (
-                (min(pickable, key=lambda n: abs(n - at)) if at is not None else pickable[0]) if pickable else None
-            )
+                opts.highlighted = min(at, len(outputs) - 1)
+            else:
+                self.paths = [""]
+                opts.add_options([Option(Text("No outputs yet. a adds one.", style="dim"), disabled=True)])
 
-        def current(self) -> tuple[str, str] | None:
+        def current(self) -> str | None:
             opts = self.query_one("#arts", OptionList)
-            if opts.highlighted is None or self.rows[opts.highlighted][0] == "none":
-                return None
-            return self.rows[opts.highlighted]
+            return self.paths[opts.highlighted] or None if opts.highlighted is not None else None
 
         def on_option_list_option_selected(self, event) -> None:
             event.stop()
-            row = self.current()
-            if row and not artifacts.open_path(row[1]):
-                self.notify(f"Could not open {row[1]}", severity="error")
+            path = self.current()
+            if path and not artifacts.open_path(path):
+                self.notify(f"Could not open {path}", severity="error")
 
-        def action_toggle_hidden(self) -> None:
-            row = self.current()
-            if not row:
+        def action_remove(self) -> None:
+            path = self.current()
+            if not path:
                 return
-            state, path = row
-            if state == "live":
-                self.ops["hide"](path)
-                self.undo.append(("restore", path))
-            else:
-                self.ops["restore"](path)
-                self.undo.append(("hide", path))
-            self.fill(self.query_one("#arts", OptionList).highlighted)
+            at = self.query_one("#arts", OptionList).highlighted or 0
 
-        def action_undo(self) -> None:
-            if not self.undo:
-                self.notify("Nothing to undo")
-                return
-            op, path = self.undo.pop()
-            self.ops[op](path)
-            self.fill(self.query_one("#arts", OptionList).highlighted)
+            def answered(yes: bool | None) -> None:
+                if yes:
+                    self.ops["remove"](path)
+                    self.fill(at)
+
+            self.app.push_screen(Confirm(f"Remove this output?\n{path.replace(str(Path.home()), '~')}"), answered)
 
         def action_add(self) -> None:
             self.query_one("#add-label").display = True
@@ -1277,7 +1326,6 @@ def build_app():
                 self.notify(f"{event.value.strip() or 'That'} does not exist", severity="error")
                 return
             self.ops["add"](str(path))
-            self.undo.append(("remove", str(path)))
             self.close_add()
             self.fill()
 
@@ -1288,7 +1336,7 @@ def build_app():
 
         def check_action(self, action: str, parameters: tuple) -> bool | None:
             adding = self.query_one("#add-path").display
-            return not (adding and action in ("toggle_hidden", "add"))  # letters belong to the path box
+            return not (adding and action in ("remove", "add"))  # letters belong to the path box
 
         def action_close(self) -> None:
             if self.query_one("#add-path").display:
@@ -1342,7 +1390,7 @@ def build_app():
         def on_key(self, event) -> None:
             """Typing in column mode, or on a header, starts that column's search right away."""
             app = self.app
-            if ("+" in event.key and event.key != "plus") or event.key in ("R", "greater_than_sign"):
+            if ("+" in event.key and event.key != "plus") or event.key in ("R", "P", "greater_than_sign"):
                 return  # a chord (Ctrl+E) or Shift+R / Shift+. is a shortcut, never text for the search
             if app.col is not None and event.is_printable:
                 if event.character and event.character != " ":
@@ -1369,9 +1417,11 @@ def build_app():
         TITLE = "follow-ups"
         BINDINGS = [
             Binding("1", "view('jobs')", "Jobs"),
-            Binding("2", "view('board')", "Board"),
+            Binding("2", "view('board')", "Follow-ups"),
             Binding("a", "add", "Add"),
             Binding("R", "start_session", "Session"),
+            Binding("P", "promote", "Promote", show=False),
+            Binding("ctrl+o", "jump_back", "Back", show=False),
             Binding("e", "edit", "Edit"),
             Binding("s", "advance", "Status"),
             Binding("d", "done", "Done"),
@@ -1453,6 +1503,8 @@ def build_app():
             self.jsort: tuple[str, bool] = ("last_worked", True)  # Jobs: (column, descending)
             self.bfilters: dict = {}  # Board column mode: column -> filter
             self.runner = self.run_suspended  # tests swap this for a recorder
+            self.jumps: list[tuple] = []  # where each jump between screens started (ctrl+o goes back)
+            self.drafts: dict = {}  # unsaved notes / why text, kept until fu closes
 
         # ---- layout
         def compose(self) -> ComposeResult:
@@ -1496,6 +1548,8 @@ def build_app():
             "touch",
             "copy",
             "start_session",
+            "promote",
+            "jump_back",
             "delete",
             "filter",
             "clear_filters",
@@ -1512,7 +1566,7 @@ def build_app():
                 return False  # our keys belong to the dialog
             if action == "filter" and self.view != "board":
                 return False  # the Jobs board filters through its column headers
-            return not (action in ("advance", "done", "touch") and self.view != "board")
+            return not (action in ("advance", "done", "touch", "promote") and self.view != "board")
 
         # ---- state
         def reload(self, keep=None) -> None:
@@ -1594,7 +1648,7 @@ def build_app():
             return next((j for j in self.db["jobs"] if str(j["id"]) == key), None)
 
         def update_chrome(self) -> None:
-            tabs = [("jobs", "1 Jobs"), ("board", "2 Board")]
+            tabs = [("jobs", "1 Jobs"), ("board", "2 Follow-ups")]
             on_tabs = self.header == -1
             self.query_one("#tabs", Static).update(
                 "   ".join(
@@ -1618,7 +1672,7 @@ def build_app():
                     else ""
                 )
                 + (
-                    "   [b]screens:[/] [dim]← → switch between Jobs and Board · ↓ to the headers[/]"
+                    "   [b]screens:[/] [dim]← → switch between Jobs and Follow-ups · ↓ to the headers[/]"
                     if self.header == -1
                     else "   [b]headers:[/] [dim]← → move · enter sorts · type searches · ↑ screens · ↓ rows[/]"
                     if self.header is not None
@@ -1671,7 +1725,6 @@ def build_app():
             for n, (col, label) in enumerate(COLUMNS):
                 table.add_column(self.header_text("board", n, col, label), key=col)
             table.show_cursor = not (self.header is not None and self.view == "board")
-            tint = self.col if self.view == "board" else None
             for i in visible:
                 label, colour = BADGE[i["status"]]
                 job = next((j for j in self.db["jobs"] if j["id"] == i.get("job_id")), None)
@@ -1683,8 +1736,6 @@ def build_app():
                     Text(i["added"], style="dim"),
                     Text(f"{i['last_worked']}  {age(i['last_worked'])}", style=heat(idle_days(i))),
                 ]
-                if tint is not None:
-                    cells[tint].stylize(COLUMN_TINT)  # column mode: the whole column stands out
                 table.add_row(*cells, key=str(i["id"]))
             ids = [str(i["id"]) for i in visible]
             if keep in ids:
@@ -1728,7 +1779,6 @@ def build_app():
             for n, (col, label) in enumerate(JOB_COLUMNS_UI):
                 table.add_column(self.header_text("jobs", n, col, label), key=col)
             table.show_cursor = not (self.header is not None and self.view == "jobs")
-            tint = self.col if self.view == "jobs" else None
             for r in rows:
                 job = r["job"]
                 cells = [
@@ -1742,8 +1792,6 @@ def build_app():
                         style=heat(idle_days(r)),
                     ),
                 ]
-                if tint is not None:
-                    cells[tint].stylize(COLUMN_TINT)  # column mode: the whole column stands out
                 table.add_row(*cells, key=str(job["id"]))
             ids = [str(r["job"]["id"]) for r in rows]
             if keep in ids:
@@ -1774,8 +1822,10 @@ def build_app():
             self.show_board_detail() if self.view == "board" else self.show_jobs_detail()
 
         def first_enabled(self) -> int | None:
+            """Where the cursor lands in the panel: the first link (the parent, a job, a session), not Why."""
             panel = self.query_one(self.panel_id(), SummaryList)
-            return next((n for n in range(panel.option_count) if not panel.get_option_at_index(n).disabled), None)
+            usable = [n for n in range(panel.option_count) if not panel.get_option_at_index(n).disabled]
+            return next((n for n in usable if panel.get_option_at_index(n).id != "why"), usable[0] if usable else None)
 
         def focus_panel(self, key: str | None = None) -> None:
             """Put the cursor in the panel, on the entry with this key (else the first actionable one)."""
@@ -1795,8 +1845,16 @@ def build_app():
             self.in_panel = False
             self.update_chrome()
 
-        def select_job(self, job_id: int) -> None:
+        # ---- jumping between the screens, and back (ctrl+o)
+        def here(self) -> tuple:
+            """Where the cursor is: the screen, its row, and the panel entry if it is in the panel."""
+            panel = self.query_one(self.panel_id(), SummaryList)
+            return (self.view, self.cursor_key(self.table_id()), panel.entry_id() if self.in_panel else None)
+
+        def select_job(self, job_id: int, remember: bool = True) -> None:
             """Jump to a job's row on the Jobs screen (clearing filters that hide it) and stay in the panel."""
+            if remember:
+                self.jumps.append(self.here())
             if self.view != "jobs":
                 self.action_view("jobs")
             if not any(r["job"]["id"] == job_id for r in self.jobs_visible()):
@@ -1808,21 +1866,60 @@ def build_app():
             self.update_chrome()
             self.call_after_refresh(self.focus_panel)
 
+        def select_item(self, item_id: int, remember: bool = True, key: str | None = None) -> None:
+            """Jump to a follow-up on the Follow-ups screen (showing it if filters hide it), in its panel."""
+            if remember:
+                self.jumps.append(self.here())
+            if self.view != "board":
+                self.action_view("board")
+            if not any(i["id"] == item_id for i in self.visible_items()):
+                self.filters, self.bfilters, self.show_done = {}, {}, True
+                self.refresh_table(None)
+            ids = [i["id"] for i in self.visible_items()]
+            self.query_one("#table", DataTable).move_cursor(row=ids.index(item_id))
+            self.show_board_detail()
+            self.update_chrome()
+            self.call_after_refresh(self.focus_panel, key)
+
+        def action_jump_back(self) -> None:
+            """Back to where the last jump started, panel entry and all."""
+            if not self.jumps:
+                self.notify("Nowhere to go back to")
+                return
+            view, row, entry = self.jumps.pop()
+            if view == "jobs" and row is not None:
+                self.select_job(int(row), remember=False)
+            elif row is not None:
+                self.select_item(int(row), remember=False)
+            else:
+                self.action_view(view)
+                return
+            if entry:
+                self.call_after_refresh(self.focus_panel, entry)
+            else:
+                self.call_after_refresh(self.focus_rows)
+
         # ---- the panels' entries
         def on_option_list_option_selected(self, event) -> None:
             key = event.option.id or ""
             if event.option_list.id == "jobs-detail" and (job := self.current_job()):
-                if key == "notes":
-                    self.edit_notes(job)
+                if key == "why":
+                    self.edit_text("job", job, "description", "Why")
+                elif key == "notes":
+                    self.edit_text("job", job, "notes", "Notes")
                 elif key == "artifacts":
                     self.open_artifacts(job=job)
                 elif key.startswith("job:"):
                     self.select_job(int(key.split(":", 1)[1]))
                 elif key.startswith("session:"):
                     self.session_actions(summary.session_target(self.db, job, key.split(":", 1)[1]))
+                elif key.startswith("item:"):
+                    self.followup_actions(int(key.split(":", 1)[1]))
             elif event.option_list.id == "board-detail" and (item := self.table_item()):
-                if key == "notes":
-                    self.edit_notes(item=item)
+                if key == "why":
+                    self.edit_text("item", item, "why", "Why you parked it")
+                elif key == "notes":
+                    self.edit_text("item", item, "notes", "Notes")
                 elif key == "artifacts":
                     self.open_artifacts(item=item)
                 elif key.startswith("job:"):
@@ -1830,21 +1927,86 @@ def build_app():
                 elif key.startswith("session:"):
                     self.session_actions(item)
 
-        def edit_notes(self, job: dict | None = None, item: dict | None = None) -> None:
+        def edit_text(self, kind: str, owner: dict, field: str, title: str) -> None:
+            """Edit a job's or follow-up's text field in place; the panel keeps its cursor on it."""
+            entry = {"description": "why"}.get(field, field)
+
             def done(text: str | None) -> None:
                 if text is None:
                     return
                 db = load_db()
-                if job:
-                    next(j for j in db["jobs"] if j["id"] == job["id"])["notes"] = text
-                else:
-                    next(i for i in db["items"] if i["id"] == item["id"])["notes"] = text
+                target = next(o for o in db["jobs" if kind == "job" else "items"] if o["id"] == owner["id"])
+                target[field] = text
                 save_db(db)
                 self.db = db
                 self.show_detail()
-                self.call_after_refresh(self.focus_panel, "notes")
+                self.call_after_refresh(self.focus_panel, entry)
 
-            self.push_screen(NotesForm((job or item).get("notes", "")), done)
+            self.push_screen(NotesForm(owner.get(field) or "", title, (kind, owner["id"], field)), done)
+
+        def followup_actions(self, item_id: int) -> None:
+            """Enter on a follow-up in a job's panel: go to it, resume its session, or promote it to a job."""
+            item = next((i for i in self.db["items"] if i["id"] == item_id), None)
+            if not item:
+                return
+            buttons = [("go", "Go to it")]
+            if resume_cmd(item):
+                buttons.append(("resume", "Resume"))
+            buttons.append(("promote", "Promote to job"))
+
+            def done(choice: str | None) -> None:
+                if choice == "go":
+                    self.select_item(item_id)
+                elif choice == "resume":
+                    self.resume(str(item_id))
+                elif choice == "promote":
+                    self.promote(item)
+
+            self.push_screen(Buttons(f"#{item['id']} {item['summary']}", buttons), done)
+
+        def action_promote(self) -> None:
+            item = self.current_item()
+            if item:
+                self.promote(item)
+
+        def promote(self, item: dict) -> None:
+            """Turn a follow-up into a job of its own, under the job it came from, and file it there."""
+            parent = next((j for j in self.db["jobs"] if j["id"] == item.get("job_id")), None)
+
+            def done(v: dict | None) -> None:
+                if not v:
+                    return
+                db = load_db()
+                try:
+                    new = create_job(
+                        db,
+                        v["name"],
+                        v["kind"],
+                        ext_id=v["ext_id"],
+                        parent=v["parent"] or None,
+                        desc=v["description"],
+                        home=v["home"],
+                        project=v["project"],
+                    )
+                except SystemExit as err:
+                    self.notify(str(err.code), severity="error")
+                    return
+                next(i for i in db["items"] if i["id"] == item["id"])["job_id"] = new["id"]
+                save_db(db)
+                self.reload()
+                self.notify(f"#{item['id']} is now job {job_label(new)}, filed under it")
+                self.select_job(new["id"])
+
+            values = {
+                "name": item["summary"],
+                "kind": DEFAULT_KIND,
+                "parent": job_label(parent) if parent else "",
+                "project": project_of(parent) if parent else "",
+                "description": item.get("why", ""),
+            }
+            self.push_screen(
+                JobForm("Promote to a job", values, self.parent_choices(), **self.form_extras(parent)), done
+            )
 
         def open_artifacts(self, job: dict | None = None, item: dict | None = None) -> None:
             def change(fn) -> None:
@@ -1860,23 +2022,17 @@ def build_app():
                 self.db = db
                 self.show_detail()
 
-            def listing() -> tuple[list[dict], list[str]]:
+            def listing() -> list[dict]:
                 if job:
-                    fresh = next(j for j in self.db["jobs"] if j["id"] == job["id"])
-                    return summary.job_artifacts(self.db, fresh), summary.hidden_artifacts(self.db, fresh)
-                fresh = next(i for i in self.db["items"] if i["id"] == item["id"])
-                return artifacts.item_artifacts(fresh), list(fresh.get("artifacts_dismissed", []))
+                    return summary.job_artifacts(self.db, next(j for j in self.db["jobs"] if j["id"] == job["id"]))
+                return artifacts.item_artifacts(next(i for i in self.db["items"] if i["id"] == item["id"]))
 
             ops = {
                 "list": listing,
-                "hide": lambda path: change(
-                    lambda db, o: summary.dismiss_job_artifact(db, o, path) if job else artifacts.dismiss(o, path)
-                ),
-                "restore": lambda path: change(
-                    lambda db, o: summary.restore_job_artifact(db, o, path) if job else artifacts.restore(o, path)
-                ),
                 "add": lambda path: change(lambda db, o: artifacts.add_manual(o, path)),
-                "remove": lambda path: change(lambda db, o: artifacts.remove_manual(o, path)),
+                "remove": lambda path: change(
+                    lambda db, o: summary.remove_job_artifact(db, o, path) if job else artifacts.remove(o, path)
+                ),
             }
             self.push_screen(ArtifactList(ops))
 
@@ -1898,23 +2054,43 @@ def build_app():
             self.run_session(launch.prepare_resume(item_id))
 
         def session_actions(self, item: dict | None) -> None:
-            """Resume the session this task came from, or open its folder."""
+            """Resume the session this follow-up came from, open the folder it worked in, or open the
+            agent's own files for that session."""
             if not item or not item.get("session_id"):
-                self.notify("No session recorded for this task", severity="warning")
+                self.notify("No session recorded for this follow-up", severity="warning")
                 return
+            job = next((j for j in self.db["jobs"] if j["id"] == item.get("job_id")), None)
+            files = artifacts.session_files(item["agent"], item["session_id"])
+            buttons = [("resume", "Resume"), ("folder", "Work folder")]
+            if job and job.get("home") and job["home"] != item.get("cwd"):
+                buttons.append(("home", "Job folder"))
+            if files:
+                buttons.append(("files", "Session files"))
+
+            def open_folder(path: str | None, what: str) -> None:
+                if not path or not Path(path).exists():
+                    self.notify(f"The {what} no longer exists", severity="warning")
+                else:
+                    artifacts.open_path(path)
 
             def done(choice: str | None) -> None:
                 if choice == "resume":
                     self.resume(str(item["id"]))
                 elif choice == "folder":
-                    cwd = item.get("cwd")
-                    if not cwd or not Path(cwd).is_dir():
-                        self.notify("This session's folder no longer exists", severity="warning")
-                    else:
-                        artifacts.open_path(cwd)
+                    open_folder(item.get("cwd"), "work folder")
+                elif choice == "home":
+                    open_folder(job["home"], "job folder")
+                elif choice == "files":
+                    artifacts.reveal(str(files))
 
+            where = launch.home(item.get("cwd")) or "?"
             self.push_screen(
-                SessionActions(summary.session_line(item["agent"], item["session_id"], item.get("cwd"))), done
+                Buttons(
+                    summary.session_line(item["agent"], item["session_id"], item.get("cwd")),
+                    buttons,
+                    f"worked in {where}" + (f" · session files {launch.home(str(files))}" if files else ""),
+                ),
+                done,
             )
 
         # ---- events
@@ -2192,6 +2368,7 @@ def build_app():
                                 parent=v["parent"] or None,
                                 desc=v["description"],
                                 home=v["home"],
+                                project=v["project"],
                             )
                         except SystemExit as err:  # core reports bad ids and parents by exiting
                             self.notify(str(err.code), severity="error")
@@ -2199,7 +2376,9 @@ def build_app():
                         save_db(db)
                         self.reload()
 
-                self.push_screen(JobForm("New job", {"kind": DEFAULT_KIND}, self.parent_choices()), job_done)
+                self.push_screen(
+                    JobForm("New job", {"kind": DEFAULT_KIND}, self.parent_choices(), **self.form_extras()), job_done
+                )
                 return
 
             def done(v: dict | None) -> None:
@@ -2245,13 +2424,34 @@ def build_app():
                             ext_id=v["ext_id"],
                             description=v["description"],
                             home=home_path(v["home"]),
+                            project=v["project"],
                         )
+                        remember_type(db, v["kind"])
                         save_db(db)
                         self.reload()
 
                 parent = next((j for j in self.db["jobs"] if j["id"] == job["parent_id"]), None)
                 values = {**job, "parent": job_label(parent) if parent else "", "home": launch.home(job.get("home"))}
-                self.push_screen(JobForm(f"Edit {job_label(job)}", values, self.parent_choices(job)), job_done)
+                self.push_screen(
+                    JobForm(f"Edit {job_label(job)}", values, self.parent_choices(job), **self.form_extras(job)),
+                    job_done,
+                )
+
+        def form_extras(self, job: dict | None = None) -> dict:
+            """What the job form offers: the types, projects and description templates (for the job's
+            project, if it has one)."""
+            project = project_of(job) if job else None
+            projects: dict[str, str] = {}
+            for j in self.db["jobs"]:
+                if project_of(j):
+                    projects[project_of(j)] = "jobs"
+            for key in config.load().get("projects") or {}:
+                projects.setdefault(str(key), "config")
+            return {
+                "types": job_types(self.db, project),
+                "projects": sorted(projects.items()),
+                "templates": (config.for_project(project).get("jobs") or {}).get("templates") or {},
+            }
 
         def parent_choices(self, job: dict | None = None) -> list[tuple[str, str]]:
             """(label, name) of every job that could be this one's parent: not itself, not its own children."""

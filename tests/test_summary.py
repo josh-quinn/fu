@@ -69,17 +69,18 @@ def test_header_lines_name_the_job_its_id_type_and_parent(board):
 
 def test_why_is_the_job_description_else_the_latest_tasks_why(board):
     db, epic = board
-    assert "Build backprop from scratch" in texts(summary.build(db, epic), "text")
+    e = summary.build(db, epic)
+    assert "Build backprop from scratch" in texts(e, "action") and keys(e)[0] == "why"  # enter edits it
     story = core.job_by_ref(db, "ML-2")
-    assert "layer 2 mismatch" in texts(summary.build(db, story), "text")
+    assert "layer 2 mismatch" in texts(summary.build(db, story), "action")
 
 
 def test_several_child_jobs_get_a_heading_and_a_line_each(board):
     db, epic = board
     e = summary.build(db, epic)
     assert "Jobs" in texts(e, "head")
-    assert texts(e, "action")[:2] == ["ML-2: story Gradient check (done)", "ML-3: story Softmax (todo)"]
-    assert keys(e)[:2] == [f"job:{core.job_by_ref(db, r)['id']}" for r in ("ML-2", "ML-3")]
+    assert texts(e, "action")[1:3] == ["ML-2: story Gradient check (done)", "ML-3: story Softmax (todo)"]
+    assert keys(e)[1:3] == [f"job:{core.job_by_ref(db, r)['id']}" for r in ("ML-2", "ML-3")]
 
 
 def test_a_lone_child_job_still_sits_under_the_jobs_heading(board):
@@ -116,7 +117,7 @@ def test_a_job_without_children_or_sessions_omits_those_sections(isolated):
     job = core.create_job(db, "Cheatsheet", "btw")
     e = summary.build(db, job)
     assert not {"Jobs", "Sessions"} & set(texts(e, "head"))
-    assert keys(e) == ["artifacts", "notes"]  # nothing to jump to; artifacts can still be added
+    assert keys(e) == ["why", "artifacts", "notes"]  # nothing to jump to; outputs can still be added
     assert "none yet · enter to add one" in texts(e)
 
 
@@ -131,8 +132,8 @@ def test_a_child_lists_its_parent_first_so_climbing_back_is_one_step(board):
     story = core.job_by_ref(db, "ML-2")
     e = summary.build(db, story)
     assert texts(e, "head")[:2] == ["Why", "Parent"]
-    assert keys(e)[0] == f"job:{epic['id']}"
-    assert texts(e, "action")[0] == f"{core.job_label(epic)}: epic Backprop (doing)"
+    assert keys(e)[1] == f"job:{epic['id']}"
+    assert texts(e, "action")[1] == f"{core.job_label(epic)}: epic Backprop (doing)"
 
 
 def test_a_job_without_a_parent_has_no_parent_heading(board):
@@ -195,17 +196,16 @@ def test_open_path_reports_failure_instead_of_raising(monkeypatch):
     assert artifacts.open_path("/a/x.md") is False
 
 
-def test_a_hidden_job_artifact_is_kept_on_record_and_can_come_back(board, isolated):
+def test_a_removed_output_goes_and_stays_gone_until_added_again(board, isolated):
     db, epic = board
     note = isolated / "runbook.md"
     note.write_text("x")
     artifacts.add_manual(next(i for i in db["items"] if i["summary"] == "grads"), str(note))
     path = str(note)
-    summary.dismiss_job_artifact(db, epic, path)
+    summary.remove_job_artifact(db, epic, path)
     assert path not in [a["path"] for a in summary.job_artifacts(db, epic)]
-    assert summary.hidden_artifacts(db, epic) == [path]
-    summary.restore_job_artifact(db, epic, path)
-    assert path in [a["path"] for a in summary.job_artifacts(db, epic)] and summary.hidden_artifacts(db, epic) == []
+    artifacts.add_manual(epic, path)
+    assert path in [a["path"] for a in summary.job_artifacts(db, epic)]
 
 
 def test_artifacts_added_to_a_job_by_hand_are_listed_and_can_be_taken_back(isolated):
@@ -215,7 +215,7 @@ def test_artifacts_added_to_a_job_by_hand_are_listed_and_can_be_taken_back(isola
     job = core.create_job(db, "Cheatsheet", "btw")
     artifacts.add_manual(job, str(note))
     assert [a["path"] for a in summary.job_artifacts(db, job)] == [str(note)]
-    artifacts.remove_manual(job, str(note))
+    artifacts.remove(job, str(note))
     assert summary.job_artifacts(db, job) == []
 
 
@@ -223,7 +223,15 @@ def test_the_board_panel_for_a_task_links_its_job_session_artifacts_and_notes(bo
     db, epic = board
     item = next(i for i in db["items"] if i.get("session_id"))
     e = summary.build_item(db, item)
-    assert (
-        keys(e)[0].startswith("job:") and keys(e)[1].startswith("session:") and keys(e)[-2:] == ["artifacts", "notes"]
-    )
-    assert "Session" in texts(e, "head") and any("--resume" in t for t in texts(e))
+    assert keys(e)[0] == "why" and keys(e)[1].startswith("job:") and keys(e)[2].startswith("session:")
+    assert keys(e)[-2:] == ["artifacts", "notes"]
+    assert "Session" in texts(e, "head") and not any("--resume" in t for t in texts(e))  # no command, just the line
+
+
+def test_a_jobs_panel_lists_its_open_follow_ups_and_counts_the_done_ones(board):
+    db, epic = board
+    e = summary.build(db, epic)
+    assert "Follow-ups" in texts(e, "head")
+    assert [k for k in keys(e) if k.startswith("item:")] == ["item:1", "item:2"]
+    child = core.job_by_ref(db, "ML-2")
+    assert "Follow-ups  (1 done)" in texts(summary.build(db, child), "head")

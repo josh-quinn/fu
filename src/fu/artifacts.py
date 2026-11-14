@@ -228,16 +228,32 @@ def dismiss(item: dict, path: str) -> None:
     item["artifacts_dismissed"] = sorted({*item.get("artifacts_dismissed", []), path})
 
 
-def restore(item: dict, path: str) -> None:
-    """Bring back a hidden artifact."""
-    item["artifacts_dismissed"] = [d for d in item.get("artifacts_dismissed", []) if d != path]
+def remove(item: dict, path: str) -> None:
+    """Take an output away for good: an entry added by hand goes, and a detected one stays suppressed
+    (recorded under artifacts_dismissed, which nothing shows)."""
+    item["artifacts"] = [a for a in item.get("artifacts", []) if a["path"] != path]
+    dismiss(item, path)
 
 
-def remove_manual(item: dict, path: str) -> None:
-    """Take back an artifact added by hand (undoing an add)."""
-    item["artifacts"] = [
-        a for a in item.get("artifacts", []) if not (a["path"] == path and a.get("source") == "manual")
-    ]
+def session_files(agent: str | None, session_id: str | None) -> Path | None:
+    """Where the agent keeps this session: Copilot's session folder, or Claude's transcript file."""
+    if agent == "copilot" and session_id:
+        folder = core.COPILOT_SESSIONS / session_id
+        return folder if folder.is_dir() else None
+    if agent == "claude" and session_id:
+        return claude_transcript(session_id)
+    return None
+
+
+def reveal(path: str) -> bool:
+    """Show a file in its folder (selected, on macOS), or open a folder."""
+    if Path(path).is_dir() or sys.platform != "darwin":
+        return open_path(path if Path(path).is_dir() else str(Path(path).parent))
+    try:
+        subprocess.Popen(["open", "-R", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603, S607
+    except OSError:
+        return False
+    return True
 
 
 def open_path(path: str) -> bool:

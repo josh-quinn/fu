@@ -37,24 +37,10 @@ def job_artifacts(db: dict, job: dict) -> list[dict]:
     return list(out.values())
 
 
-def hidden_artifacts(db: dict, job: dict) -> list[str]:
-    """Paths hidden on the job or any of its tasks, kept so they can be brought back."""
-    paths = set(job.get("artifacts_dismissed", []))
-    for item in job_items(db, job):
-        paths |= set(item.get("artifacts_dismissed", []))
-    return sorted(paths)
-
-
-def dismiss_job_artifact(db: dict, job: dict, path: str) -> None:
-    artifacts.dismiss(job, path)
-    for item in job_items(db, job):
-        artifacts.dismiss(item, path)
-
-
-def restore_job_artifact(db: dict, job: dict, path: str) -> None:
-    artifacts.restore(job, path)
-    for item in job_items(db, job):
-        artifacts.restore(item, path)
+def remove_job_artifact(db: dict, job: dict, path: str) -> None:
+    """Take an output off the job: whether added by hand or detected, it goes, and stays gone."""
+    for owner in [job, *job_items(db, job)]:
+        artifacts.remove(owner, path)
 
 
 def sessions_of(db: dict, job: dict) -> list[tuple[str, list[dict]]]:
@@ -66,8 +52,8 @@ def sessions_of(db: dict, job: dict) -> list[tuple[str, list[dict]]]:
 def build(db: dict, job: dict) -> list[dict]:
     """Entries: {"key": None | action key, "style": title|meta|head|text|action, "text": str, "enabled": bool}.
 
-    Keys: notes, artifacts, session:<agent:id>, job:<id>. The parent comes first so a child can climb
-    back to it; Parent, Jobs and Sessions always get a heading, even for a single entry.
+    Keys: why, notes, artifacts, session:<agent:id>, job:<id>, item:<id>. The parent comes first so a
+    child can climb back to it; Parent, Jobs, Follow-ups and Sessions always get a heading, even for one.
     """
     parent = next((j for j in db["jobs"] if j["id"] == job["parent_id"]), None)
     children = [j for j in db["jobs"] if j["parent_id"] == job["id"]]
@@ -85,8 +71,9 @@ def build(db: dict, job: dict) -> list[dict]:
     add("meta", f"{job_label(job)} · {job['kind']}" + (f" · under {parent['name']}" if parent else ""))
     add("head", "Why")
     add(
-        "text",
-        job["description"] or (latest["why"] if latest and latest["why"] else "No description. Press e to add one."),
+        "action",
+        job["description"] or (latest["why"] if latest and latest["why"] else "No description · enter to add one"),
+        "why",
     )
 
     if parent:
@@ -98,6 +85,13 @@ def build(db: dict, job: dict) -> list[dict]:
         for child in sorted(children, key=lambda j: j["id"]):
             add("action", job_line(db, child), f"job:{child['id']}")
 
+    open_items = sorted((i for i in items if i["status"] != "done"), key=lambda i: (i["status"] != "doing", i["id"]))
+    done = len(items) - len(open_items)
+    if items:
+        add("head", "Follow-ups" + (f"  ({done} done)" if done else ""))
+        for i in open_items:
+            add("action", f"#{i['id']} {i['summary']} ({i['status']})", f"item:{i['id']}")
+
     if sessions:
         add("head", "Sessions")
         for k, group in sessions:
@@ -108,7 +102,7 @@ def build(db: dict, job: dict) -> list[dict]:
                 f"session:{k}",
             )
 
-    add("head", "Artifacts")
+    add("head", "Outputs")
     add("action", f"{len(arts)} to open" if arts else "none yet · enter to add one", "artifacts")
 
     add("head", "Notes")
@@ -117,9 +111,9 @@ def build(db: dict, job: dict) -> list[dict]:
 
 
 def build_item(db: dict, item: dict) -> list[dict]:
-    """The Board panel for one task, in the same shape as build(). Keys: job:<id>, session:<key>,
-    artifacts, notes."""
-    from fu.core import age, job_name, resume_cmd, skey
+    """The Follow-ups panel for one follow-up, in the same shape as build(). Keys: why, job:<id>,
+    session:<key>, artifacts, notes."""
+    from fu.core import age, job_name, skey
 
     job = next((j for j in db["jobs"] if j["id"] == item.get("job_id")), None)
     arts = artifacts.item_artifacts(item)
@@ -131,7 +125,7 @@ def build_item(db: dict, item: dict) -> list[dict]:
     add("title", item["summary"])
     add("meta", f"#{item['id']} · {item['status']} · added {item['added']} · worked {age(item['last_worked'])}")
     add("head", "Why")
-    add("text", item["why"] or "-")
+    add("action", item["why"] or "enter to add why you parked it", "why")
     add("head", "Job")
     if job:
         add("action", job_line(db, job), f"job:{job['id']}")
@@ -140,10 +134,9 @@ def build_item(db: dict, item: dict) -> list[dict]:
     add("head", "Session")
     if skey(item):
         add("action", session_line(item["agent"], item["session_id"], item.get("cwd")), f"session:{skey(item)}")
-        add("text", resume_cmd(item) or "")
     else:
         add("text", "no session id captured")
-    add("head", "Artifacts")
+    add("head", "Outputs")
     add("action", f"{len(arts)} to open" if arts else "none yet · enter to add one", "artifacts")
     add("head", "Notes")
     add("action", item.get("notes") or "Enter to add a note", "notes")

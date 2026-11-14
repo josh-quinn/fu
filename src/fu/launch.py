@@ -28,7 +28,7 @@ CONTEXT = (
     ("parent", "Parent job"),
     ("jobs", "Child jobs"),
     ("sessions", "Earlier sessions"),
-    ("artifacts", "Artifacts"),
+    ("artifacts", "Outputs"),
 )
 LISTS = ("tasks", "jobs", "sessions", "artifacts")  # sections whose entries can be picked one by one
 SKILL_ROOTS = ("~/.claude/skills", "~/.copilot/skills")
@@ -227,7 +227,7 @@ def brief(
     if "artifacts" in include:
         arts = [a for a in summary.job_artifacts(db, job) if _wanted(picked, "artifacts", a["path"])]
         if arts:
-            out += ["", "## Artifacts (deliverables earlier sessions left)"]
+            out += ["", "## Outputs (documents, skills and repos earlier sessions made for this job)"]
             out += [f"- {a['kind']}: {a['label']} - {home(a['path'])}" for a in arts]
 
     out += ["", "## Keeping the board current"]
@@ -237,7 +237,7 @@ def brief(
         f'- Something left unfinished: park it with `fu add "<summary>" --why "<why>" --job {job_label(job)}`'
         " (or the follow-ups skill).",
         "- A task finished: `fu done <id>`.",
-        "- Documents, skills and repos you write are picked up as artifacts on their own.",
+        "- Documents, skills and repos you write are picked up as the job's outputs on their own.",
     ]
     return "\n".join(out) + "\n"
 

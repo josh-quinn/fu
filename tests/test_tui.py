@@ -503,7 +503,7 @@ def test_job_type_is_a_dropdown_of_the_default_kinds(seeded):
         await pilot.press("1", "a")
         form = app.screen
         options = [value for _, value in form.query_one("#edit-kind", Select)._options]
-        assert options == list(core.KINDS)
+        assert options == [*core.KINDS, "Other…"]
         assert form.vals["kind"] == core.DEFAULT_KIND
         await pilot.press("enter", *"Cache is stale", "enter", "down", "down")
         assert focused(app) == "row-kind"
@@ -721,7 +721,7 @@ def test_right_enters_the_panel_on_its_first_actionable_entry_and_left_leaves(ep
     async def steps(app, pilot):
         await open_panel(app, pilot)
         assert app.focused is panel(app) and app.in_panel
-        assert entry_key(app) == panel_keys(app)[0]
+        assert entry_key(app) == panel_keys(app)[1]  # the first link; Why sits above it, one up
         await pilot.press("left")
         assert app.focused is jobs_table(app) and not app.in_panel
 
@@ -744,9 +744,8 @@ def test_up_and_down_land_only_on_actionable_entries(epic_board):
 def test_the_panel_cursor_stops_at_the_first_entry_too(epic_board):
     async def steps(app, pilot):
         await open_panel(app, pilot)
-        first = entry_key(app)
         await pilot.press("up", "up", "up")
-        assert entry_key(app) == first  # no wrapping round to the last entry
+        assert entry_key(app) == "why"  # the first entry: no wrapping round to the last one
 
     drive(steps)
 
@@ -761,7 +760,7 @@ def test_enter_on_a_child_job_jumps_to_its_row_and_keeps_the_cursor_in_the_panel
         assert app.focused is panel(app)
         assert "Gradient check" in str(panel(app).get_option_at_index(0).prompt)
         # the cursor starts inside the new job's panel, not nowhere and not on a stale row
-        assert entry_key(app) == panel_keys(app)[0]
+        assert entry_key(app) == panel_keys(app)[1]
 
     drive(steps)
 
@@ -779,18 +778,18 @@ def test_jumping_to_a_job_hidden_by_a_filter_clears_the_filters(epic_board):
     drive(steps)
 
 
-def test_enter_on_a_session_offers_resume_or_session_folder_buttons_and_esc_goes_back(epic_board):
+def test_enter_on_a_session_offers_resume_and_work_folder_and_esc_goes_back(epic_board):
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "session:")
         await pilot.press("enter")
         await pilot.pause()
-        assert app.screen.__class__.__name__ == "SessionActions"
-        assert [label for _, label in app.screen.BUTTONS] == ["Resume", "Session folder"]
+        assert app.screen.__class__.__name__ == "Buttons"
+        assert [label for _, label in app.screen.buttons] == ["Resume", "Work folder"]  # no session files here
         assert app.screen.on == "resume"
         await pilot.press("escape")
         await pilot.pause()
-        assert app.screen.__class__.__name__ != "SessionActions" and app.focused is panel(app)
+        assert app.screen.__class__.__name__ != "Buttons" and app.focused is panel(app)
 
     drive(steps)
 
@@ -851,7 +850,7 @@ def test_enter_on_artifacts_lists_them_and_enter_opens_one_in_its_app(epic_board
         await pilot.press("enter")
         await pilot.pause()
         assert app.screen.__class__.__name__ == "ArtifactList"
-        assert app.screen.rows == [("live", str(epic_board["runbook"]))]
+        assert app.screen.paths == [str(epic_board["runbook"])]
         await pilot.press("enter")
         assert opened == [str(epic_board["runbook"])]
         await pilot.press("escape")
@@ -861,36 +860,25 @@ def test_enter_on_artifacts_lists_them_and_enter_opens_one_in_its_app(epic_board
     drive(steps)
 
 
-def test_x_hides_a_wrong_guess_but_keeps_it_under_hidden_where_x_brings_it_back(epic_board):
+def test_x_removes_an_output_after_asking_and_it_stays_gone(epic_board):
     from fu import summary
 
-    def state():
+    def outputs():
         db = core.load_db()
-        job = core.job_by_ref(db, "ML-1")
-        return [a["path"] for a in summary.job_artifacts(db, job)], summary.hidden_artifacts(db, job)
+        return [a["path"] for a in summary.job_artifacts(db, core.job_by_ref(db, "ML-1"))]
 
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "artifacts")
         await pilot.press("enter", "x")
         await pilot.pause()
-        runbook = str(epic_board["runbook"])
-        assert state() == ([], [runbook])
-        assert ("hidden", runbook) in app.screen.rows
-        await pilot.press("x")  # the cursor sits on the hidden one now
+        assert app.screen.__class__.__name__ == "Confirm"
+        await pilot.press("n")
         await pilot.pause()
-        assert state() == ([runbook], [])
-
-    drive(steps)
-
-
-def test_ctrl_z_undoes_hiding_an_artifact(epic_board):
-    async def steps(app, pilot):
-        await open_panel(app, pilot)
-        await goto_entry(app, pilot, "artifacts")
-        await pilot.press("enter", "x", "ctrl+z")
+        assert outputs() == [str(epic_board["runbook"])]
+        await pilot.press("x", "y")
         await pilot.pause()
-        assert app.screen.rows[0] == ("live", str(epic_board["runbook"]))
+        assert outputs() == [] and app.screen.paths == [""]  # no Hidden section: it is just gone
 
     drive(steps)
 
@@ -907,14 +895,14 @@ def test_artifacts_can_be_added_by_hand_even_when_there_are_none(isolated):
         await goto_entry(app, pilot, "artifacts")
         await pilot.press("enter")
         await pilot.pause()
-        assert app.screen.__class__.__name__ == "ArtifactList" and app.screen.rows == [("none", "")]
+        assert app.screen.__class__.__name__ == "ArtifactList" and app.screen.paths == [""]
         await pilot.press("a")
         box = app.screen.query_one("#add-path")
         box.value = str(note)
         await pilot.press("escape")  # closes the suggestions first, not the list
         await pilot.press("enter")
         await pilot.pause()
-        assert app.screen.rows == [("live", str(note))]
+        assert app.screen.paths == [str(note)]
         job = core.job_by_ref(core.load_db(), "Cheatsheet")
         assert [a["path"] for a in job["artifacts"]] == [str(note)]
 
@@ -926,8 +914,11 @@ def test_notes_are_added_with_ctrl_s_and_esc_discards(epic_board):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "notes")
         await pilot.press("enter", *"ask about relu", "escape")
-        assert core.job_by_ref(core.load_db(), "ML-1")["notes"] == ""
-        await pilot.press("enter", *"ask about relu", "ctrl+s")
+        assert core.job_by_ref(core.load_db(), "ML-1")["notes"] == ""  # not saved...
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.query_one("#notes-text").text == "ask about relu"  # ...but the draft is back
+        await pilot.press("ctrl+s")
         await pilot.pause()
         assert core.job_by_ref(core.load_db(), "ML-1")["notes"] == "ask about relu"
         assert app.focused is panel(app)
@@ -1484,6 +1475,7 @@ def test_right_on_a_board_row_enters_its_panel_and_the_job_entry_jumps_to_jobs(s
         assert app.focused is board_panel and app.in_panel
         keys = [board_panel.get_option_at_index(n).id for n in range(board_panel.option_count)]
         assert [k for k in keys if k] == [
+            "why",
             "job:1",
             "session:copilot:bbbb2222-0000-0000-0000-000000000002",
             "artifacts",
@@ -1502,7 +1494,7 @@ def test_a_board_tasks_session_entry_offers_resume(seeded):
             await pilot.press("down")
         await pilot.press("right", "down", "enter")
         await pilot.pause()
-        assert app.screen.__class__.__name__ == "SessionActions"
+        assert app.screen.__class__.__name__ == "Buttons"
         await pilot.press("enter")
         await pilot.pause()
         assert app.ran == ["cd /d && copilot --resume=bbbb2222-0000-0000-0000-000000000002"]
@@ -1573,5 +1565,138 @@ def test_a_quick_right_straight_after_enter_moves_the_column_not_into_the_panel(
     async def steps(app, pilot):
         await pilot.press("1", "enter", "right")
         assert app.col == 1 and not app.in_panel
+
+    drive(steps)
+
+
+# ---- review 3: the follow-ups / jobs / outputs model
+
+
+async def to_followup(app, pilot, summary_text: str) -> None:
+    while app.table_item()["summary"] != summary_text:
+        await pilot.press("down")
+
+
+def test_the_second_tab_is_called_follow_ups(seeded):
+    async def steps(app, pilot):
+        assert "2 Follow-ups" in str(app.query_one("#tabs").render())
+
+    drive(steps)
+
+
+def test_ctrl_o_returns_from_a_jump_to_the_same_panel_entry(seeded):
+    async def steps(app, pilot):
+        await to_followup(app, pilot, "Vectorise softmax")
+        await pilot.press("right")
+        await pilot.pause()
+        assert app.query_one("#board-detail").entry_id() == "job:1"
+        await pilot.press("enter")  # jump to the job
+        await pilot.pause()
+        assert app.view == "jobs"
+        await pilot.press("ctrl+o")
+        await pilot.pause()
+        await pilot.pause()
+        assert app.view == "board" and app.table_item()["summary"] == "Vectorise softmax"
+        assert app.in_panel and app.query_one("#board-detail").entry_id() == "job:1"
+
+    drive(steps)
+
+
+def test_enter_on_why_edits_it(seeded):
+    async def steps(app, pilot):
+        await to_followup(app, pilot, "Vectorise softmax")
+        await pilot.press("right", "up", "enter")  # job -> why
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "NotesForm"
+        await pilot.press(*"slow on big batches", "ctrl+s")
+        await pilot.pause()
+        item = next(i for i in core.load_db()["items"] if i["summary"] == "Vectorise softmax")
+        assert item["why"] == "slow on big batches"
+
+    drive(steps)
+
+
+def test_other_lets_you_name_a_type_and_it_is_offered_next_time(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1", "a")
+        form = app.screen
+        await pilot.press("enter", *"Tidy CI", "enter", "down", "down", "enter")
+        await pilot.pause()
+        await pilot.press(*["down"] * 4, "enter")  # story -> Other…, the last choice
+        await pilot.pause()
+        assert app.focused.id == "other-kind"
+        await pilot.press(*"chore", "enter", "ctrl+s")
+        await pilot.pause()
+        db = core.load_db()
+        assert core.job_by_ref(db, "Tidy CI")["kind"] == "chore" and "chore" in core.job_types(db)
+        assert form is not app.screen
+
+    drive(steps)
+
+
+def test_a_types_template_fills_an_empty_description(seeded, isolated):
+    cfg = isolated / "cfg" / "follow-ups" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("jobs:\n  templates:\n    bug: 'Steps to reproduce:'\n")
+
+    async def steps(app, pilot):
+        await pilot.press("1", "a")
+        form = app.screen
+        form.query_one("#row-kind").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        form.query_one("#edit-kind", Select).value = "bug"
+        await pilot.pause()
+        assert form.vals["description"] == "Steps to reproduce:"
+
+    drive(steps)
+
+
+def test_promote_turns_a_follow_up_into_a_child_job_and_files_it_there(seeded):
+    async def steps(app, pilot):
+        await to_followup(app, pilot, "Vectorise softmax")
+        await pilot.press("P")
+        await pilot.pause()
+        form = app.screen
+        assert form.vals["name"] == "Vectorise softmax" and form.vals["parent"] == "J1"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        db = core.load_db()
+        new = core.job_by_ref(db, "Vectorise softmax")
+        item = next(i for i in db["items"] if i["summary"] == "Vectorise softmax")
+        assert new["parent_id"] == 1 and item["job_id"] == new["id"]
+        assert app.view == "jobs" and app.current_job()["id"] == new["id"]
+
+    drive(steps)
+
+
+def test_enter_on_a_follow_up_in_a_jobs_panel_offers_go_resume_and_promote(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await select_job(app, pilot, "Backprop from scratch")
+        await pilot.press("right")
+        await pilot.pause()
+        p = panel(app)
+        while not (p.entry_id() or "").startswith("item:"):
+            await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert [k for k, _ in app.screen.buttons] == ["go", "resume", "promote"]
+        await pilot.press("enter")  # Go to it
+        await pilot.pause()
+        assert app.view == "board" and app.in_panel
+
+    drive(steps)
+
+
+def test_a_project_can_be_set_on_a_job_without_a_jira_id(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1", "a")
+        form = app.screen
+        await pilot.press("enter", *"Dashboards", "enter")
+        form.query_one("#row-project").focus()
+        await pilot.press("enter", *"OPS", "enter", "ctrl+s")
+        await pilot.pause()
+        assert core.project_of(core.job_by_ref(core.load_db(), "Dashboards")) == "OPS"
 
     drive(steps)

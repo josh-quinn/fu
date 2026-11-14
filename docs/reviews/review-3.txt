@@ -1,0 +1,38 @@
+New feature/funciotnality:
+Project -> can have a jobs list
+Project -> can have 1 or many boards
+Board -> can have 1 or many jobs
+
+Config for adaptability (yaml default, or json):
+- Types can be set in config
+- Default may be set for system-wide config
+- Set config per project or per type
+    - Defaults for ID pre-pends (by project and types within project)
+    - Default Types - may inherit and extend system-wide or not
+    - Default job folder may be set
+    - Templates for job descriptions by project or type
+    - Default AI tool and session settings, tools, skills, agents, instructions, mcps, etc
+
+
+Board:
+    Summary panel:
+        - Job: selecting enter on job jumps to job panel, need a shortcut to jump back to same position on summary panel for seemless return.
+        - Why: should be able to press enter on it and update this way as well
+        - Session: don't need command here, just <agent> <shorterned-id> <name>
+        - Session: session folder (different job folder where session started from, or designated folder when adding item - both should be there) is the actual claude or copilot session folder, with all the session files, not folder where session was started
+        - Artifacts: seems path is not quite right, none of the folders under /Users/joshquinn (which is home directory) show up
+        - Notes: should be some short-term persistance until app is closed again, in case user exits notes screen without saving
+
+Jobs:
+    - Column mode: the rows are greyed out - don't do this. don't have them as any colour, only the header of selected column goes orange and the row.
+
+    New Job:
+        - Title:
+        - Project: type, options show as type
+        - Board:   type, options show as type
+        - Parent:
+        - Type: one of pre-set, or other.. -> when selected user can set there own type, type saved; types can be set in config as well.
+        -
+    Artifacts:
+        - A hidden artifact when I open one is there already, when i hoover over it and press x it doesn't reappear, it goes.
+        - Artifacts don't need to be hidden, they just need to be added or removed, and if removed, to ask user if they are sure before rmeoving.

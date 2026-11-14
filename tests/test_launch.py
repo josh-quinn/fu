@@ -165,3 +165,31 @@ def test_path_suggestions_can_include_files_after_folders(tmp_path):
     (tmp_path / "a.md").write_text("x")
     root = str(tmp_path) + "/"
     assert launch.path_suggestions(root, files=True) == [(root + "b-dir/", "folder"), (root + "a.md", "file")]
+
+
+def test_config_agent_settings_become_flags_before_the_session_and_message():
+    ai = {"model": "opus", "add_dirs": ["/x", "/y"], "allowed_tools": ["Read"], "claude": {"args": ["--verbose"]}}
+    cmd = launch.launch_cmd("claude", "u", "/w", "go", "/b.md", "", ai)
+    assert shlex.split(cmd.split("&& ", 1)[1]) == [
+        "claude", "--verbose", "--model", "opus", "--add-dir", "/x", "--add-dir", "/y", "--allowedTools", "Read",
+        "--session-id", "u", "--append-system-prompt-file", "/b.md", "go",
+    ]  # fmt: skip
+    cmd = launch.launch_cmd("copilot", "u", "/w", "go", "", "", {"mcp_config": "/m.json", "allowed_tools": ["a", "b"]})
+    assert shlex.split(cmd.split("&& ", 1)[1]) == [
+        "copilot", "--additional-mcp-config", "@/m.json", "--allow-tool", "a", "--allow-tool", "b",
+        "--session-id", "u", "-i", "go",
+    ]  # fmt: skip
+
+
+def test_instructions_and_skills_from_the_config_go_into_the_brief(db):
+    text = launch.brief(db, core.job_by_ref(db, "ML-1"), [], ai={"instructions": "Use float64.", "skills": ["learn"]})
+    assert "Use float64." in text and "Skills to reach for: /learn" in text
+
+
+def test_a_project_in_the_config_sets_its_jobs_agent_settings(db):
+    from fu import config
+
+    config.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    config.CONFIG_FILE.write_text("ai:\n  model: sonnet\nprojects:\n  ML:\n    ai:\n      model: opus\n")
+    assert launch.settings(core.job_by_ref(db, "ML-1"))["model"] == "opus"
+    assert launch.settings(core.create_job(db, "Elsewhere"))["model"] == "sonnet"

@@ -2302,7 +2302,9 @@ def build_app():
                 if v:
                     self.run_session(launch.prepare({**v, "job_id": job["id"]}))
 
-            self.push_screen(NewSession(self.db, job, last["agent"] if last else AGENTS[0]), started)
+            default = str(launch.settings(job).get("agent") or AGENTS[0])
+            agent = last["agent"] if last else (default if default in AGENTS else AGENTS[0])
+            self.push_screen(NewSession(self.db, job, agent), started)
 
         def action_help(self) -> None:
             self.push_screen(Help())

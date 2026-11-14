@@ -17,7 +17,7 @@ import shlex
 import uuid
 from pathlib import Path
 
-from fu import artifacts, core, summary
+from fu import artifacts, config, core, summary
 from fu.core import AGENTS, data_dir, job_label, job_status
 
 # What can be handed to the new session, in the order the dialog lists it.
@@ -164,6 +164,7 @@ def brief(
     include: list[str],
     picked: dict | None = None,
     task_id: int | None = None,
+    ai: dict | None = None,
 ) -> str:
     """The handoff brief: what the board knows about the job, only the ticked sections and the entries
     picked in each (picked maps a list section to the ids kept; a missing section keeps them all)."""
@@ -230,6 +231,15 @@ def brief(
             out += ["", "## Outputs (documents, skills and repos earlier sessions made for this job)"]
             out += [f"- {a['kind']}: {a['label']} - {home(a['path'])}" for a in arts]
 
+    ai = ai or {}
+    skills = [str(x) for x in ai.get("skills") or []]
+    if ai.get("instructions") or skills:
+        out += ["", "## How the user likes this kind of work done"]
+        if ai.get("instructions"):
+            out.append(str(ai["instructions"]).strip())
+        if skills:
+            out.append("Skills to reach for: " + ", ".join(f"/{x.lstrip('/')}" for x in skills))
+
     out += ["", "## Keeping the board current"]
     if task_id is not None:
         out.append(f"This session is task #{task_id} of {job_label(job)} on the board.")
@@ -264,11 +274,38 @@ def first_message(agent: str, brief_text: str, prompt: str) -> str:
     return f"{brief_text}\n## Your task\n{task_text(prompt, agent)}"
 
 
-def launch_cmd(agent: str, session_id: str, cwd: str, message: str, brief_file: str = "", name: str = "") -> str:
-    """The shell command that opens a new interactive session with a chosen id, name and first message."""
+def agent_flags(agent: str, ai: dict | None) -> list[str]:
+    """The config's agent settings (ADR 0008) as this agent's own flags."""
+    ai = ai or {}
+    out: list[str] = [str(x) for x in (ai.get(agent) or {}).get("args") or []]
+    if ai.get("model"):
+        out += ["--model", str(ai["model"])]
+    if ai.get("mcp_config"):
+        path = str(Path(str(ai["mcp_config"])).expanduser())
+        out += ["--mcp-config", path] if agent == "claude" else ["--additional-mcp-config", f"@{path}"]
+    for folder in ai.get("add_dirs") or []:
+        out += ["--add-dir", str(Path(str(folder)).expanduser())]
+    tools = [str(t) for t in ai.get("allowed_tools") or []]
+    if tools:
+        out += ["--allowedTools", *tools] if agent == "claude" else [x for t in tools for x in ("--allow-tool", t)]
+    return out
+
+
+def launch_cmd(
+    agent: str,
+    session_id: str,
+    cwd: str,
+    message: str,
+    brief_file: str = "",
+    name: str = "",
+    ai: dict | None = None,
+) -> str:
+    """The shell command that opens a new interactive session with a chosen id, name and first message.
+    Settings from the config come first: some take several values, so the single-value flags and then
+    the message must follow them."""
     if agent not in AGENTS:
         raise ValueError(f"unknown agent {agent!r}")
-    base = [agent, "--session-id", session_id]
+    base = [agent, *agent_flags(agent, ai), "--session-id", session_id]
     if name:
         base += ["--name", name]
     if agent == "claude" and brief_file:
@@ -301,14 +338,20 @@ def prepare(spec: dict) -> str:
         cwd=cwd,
         status="doing",
     )
-    text = brief(db, job, spec.get("include", []), spec.get("picked"), task_id=item["id"])
+    ai = settings(job)
+    text = brief(db, job, spec.get("include", []), spec.get("picked"), task_id=item["id"], ai=ai)
     path = brief_path(sid)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     item["brief"] = str(path)
     core.save_db(db)
     name = f"{job_label(job)} {job['name']}"
-    return launch_cmd(spec["agent"], sid, cwd, first_message(spec["agent"], text, prompt), str(path), name)
+    return launch_cmd(spec["agent"], sid, cwd, first_message(spec["agent"], text, prompt), str(path), name, ai)
+
+
+def settings(job: dict) -> dict:
+    """The agent settings for this job's project, from the config."""
+    return config.for_project(core.project_of(job)).get("ai") or {}
 
 
 def prepare_resume(item_id: str) -> str | None:

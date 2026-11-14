@@ -1,6 +1,6 @@
 # 0003. Keep board data in a visible folder and config under ~/.config/jq-tools
 
-- **Status**: Accepted
+- **Status**: Accepted (config format superseded by [0008](0008-configure-in-yaml-with-project-overrides.md))
 - **Date**: 2026-11-13
 
 ## Context

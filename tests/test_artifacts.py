@@ -182,3 +182,17 @@ def test_core_items_start_without_artifacts():
     db = core.load_db()
     item = core.new_item(db, "x")
     assert artifacts.item_artifacts(item) == []
+
+
+def test_documents_in_a_gitignored_folder_of_a_repo_are_listed_one_by_one(isolated):
+    import subprocess
+
+    repo = isolated / "proj"
+    (repo / ".temp").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text(".temp/\n")
+    runbook, code = repo / ".temp" / "runbook.md", repo / "main.py"
+    runbook.write_text("x")
+    code.write_text("x")
+    out = {(a["kind"], a["path"]) for a in artifacts.classify([str(runbook), str(code)])}
+    assert out == {("doc", str(runbook)), ("repo", str(repo))}

@@ -1,7 +1,9 @@
 """Artifacts: the deliverables a session leaves behind (runbooks, explainers, skills, repos).
 
 Not every file a session wrote counts. Documents do, a skill folder is one entry, and code inside a
-git repo collapses to that repo; scratch folders, caches and lockfiles are ignored. Detection reads
+git repo collapses to that repo. Documents in a folder the repo ignores (a `.temp/` of runbooks and
+explainers, say) are outputs in their own right, since git won't keep them. Scratch folders, caches
+and lockfiles are ignored. Detection reads
 what the agent recorded: Claude Code's transcript, Copilot's events and its per-session folders.
 """
 
@@ -128,9 +130,33 @@ def skill_dir(path: Path) -> Path | None:
     return None
 
 
+def git_ignored(root: Path, paths: list[Path]) -> set[str]:
+    """Which of these paths inside the repo at root git ignores (none if git can't tell)."""
+    if not paths:
+        return set()
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed git command; paths go in on stdin
+            ["git", "-C", str(root), "check-ignore", "--stdin"],  # noqa: S607 - git from PATH, like the user's shell
+            input="\n".join(str(p) for p in paths),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {str(Path(line).resolve()) if not Path(line).is_absolute() else line for line in out.stdout.splitlines()}
+
+
 def classify(paths: list[str]) -> list[dict]:
     """Collapse written paths into artifacts: {"path", "kind": doc|skill|repo|file, "label"}."""
     found: dict[str, dict] = {}
+    in_repos: dict[Path, list[Path]] = {}
+    for raw in paths:
+        p = Path(raw)
+        if p.suffix.lower() in DOC_SUFFIXES and p.exists() and (root := git_root(p)) and not skill_dir(p):
+            in_repos.setdefault(root, []).append(p)
+    ignored = {path for root, docs in in_repos.items() for path in git_ignored(root, docs)}
     for raw in paths:
         p = Path(raw)
         if (
@@ -142,6 +168,8 @@ def classify(paths: list[str]) -> list[dict]:
             continue
         if skill := skill_dir(p):
             kind, target = "skill", skill
+        elif str(p) in ignored:
+            kind, target = "doc", p  # kept out of git on purpose, so it is worth listing by itself
         elif root := git_root(p):
             kind, target = "repo", root
         elif p.suffix.lower() in DOC_SUFFIXES:

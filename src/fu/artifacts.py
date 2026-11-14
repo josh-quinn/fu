@@ -195,8 +195,21 @@ def add_manual(item: dict, path: str, label: str | None = None) -> dict:
 
 
 def dismiss(item: dict, path: str) -> None:
-    item["artifacts"] = [a for a in item.get("artifacts", []) if a["path"] != path]
+    """Hide an artifact. The path stays on record under artifacts_dismissed so it can come back."""
+    item["artifacts"] = [a for a in item.get("artifacts", []) if a["path"] != path or a.get("source") == "manual"]
     item["artifacts_dismissed"] = sorted({*item.get("artifacts_dismissed", []), path})
+
+
+def restore(item: dict, path: str) -> None:
+    """Bring back a hidden artifact."""
+    item["artifacts_dismissed"] = [d for d in item.get("artifacts_dismissed", []) if d != path]
+
+
+def remove_manual(item: dict, path: str) -> None:
+    """Take back an artifact added by hand (undoing an add)."""
+    item["artifacts"] = [
+        a for a in item.get("artifacts", []) if not (a["path"] == path and a.get("source") == "manual")
+    ]
 
 
 def open_path(path: str) -> bool:

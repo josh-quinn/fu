@@ -16,17 +16,45 @@ def job_line(db: dict, job: dict) -> str:
     return f"{job_label(job)}: {job['kind']} {job['name']} ({job_status(db, job)})"
 
 
-def job_artifacts(db: dict, job: dict) -> list[dict]:
-    """Every artifact of the job's tasks, each path once (the most recent task first)."""
-    out: dict[str, dict] = {}
-    for item in sorted(
+def job_items(db: dict, job: dict) -> list[dict]:
+    """The job's tasks, the most recently worked first."""
+    return sorted(
         (i for i in db["items"] if i.get("job_id") == job["id"]),
         key=lambda i: (i["last_worked"], i["id"]),
         reverse=True,
-    ):
+    )
+
+
+def job_artifacts(db: dict, job: dict) -> list[dict]:
+    """Every artifact of the job: the ones added to the job by hand, then each task's (most recent task
+    first), each path once, minus the ones hidden on the job."""
+    hidden = set(job.get("artifacts_dismissed", []))
+    out: dict[str, dict] = {a["path"]: a for a in job.get("artifacts", []) if a["path"] not in hidden}
+    for item in job_items(db, job):
         for art in artifacts.item_artifacts(item):
-            out.setdefault(art["path"], {**art, "item_id": item["id"]})
+            if art["path"] not in hidden:
+                out.setdefault(art["path"], {**art, "item_id": item["id"]})
     return list(out.values())
+
+
+def hidden_artifacts(db: dict, job: dict) -> list[str]:
+    """Paths hidden on the job or any of its tasks, kept so they can be brought back."""
+    paths = set(job.get("artifacts_dismissed", []))
+    for item in job_items(db, job):
+        paths |= set(item.get("artifacts_dismissed", []))
+    return sorted(paths)
+
+
+def dismiss_job_artifact(db: dict, job: dict, path: str) -> None:
+    artifacts.dismiss(job, path)
+    for item in job_items(db, job):
+        artifacts.dismiss(item, path)
+
+
+def restore_job_artifact(db: dict, job: dict, path: str) -> None:
+    artifacts.restore(job, path)
+    for item in job_items(db, job):
+        artifacts.restore(item, path)
 
 
 def sessions_of(db: dict, job: dict) -> list[tuple[str, list[dict]]]:
@@ -81,10 +109,44 @@ def build(db: dict, job: dict) -> list[dict]:
             )
 
     add("head", "Artifacts")
-    add("action" if arts else "text", f"{len(arts)} to open" if arts else "none yet", "artifacts" if arts else None)
+    add("action", f"{len(arts)} to open" if arts else "none yet · enter to add one", "artifacts")
 
     add("head", "Notes")
     add("action", job.get("notes") or "Enter to add a note", "notes")
+    return out
+
+
+def build_item(db: dict, item: dict) -> list[dict]:
+    """The Board panel for one task, in the same shape as build(). Keys: job:<id>, session:<key>,
+    artifacts, notes."""
+    from fu.core import age, job_name, resume_cmd, skey
+
+    job = next((j for j in db["jobs"] if j["id"] == item.get("job_id")), None)
+    arts = artifacts.item_artifacts(item)
+    out: list[dict] = []
+
+    def add(style: str, text: str, key: str | None = None) -> None:
+        out.append({"key": key, "style": style, "text": text, "enabled": bool(key)})
+
+    add("title", item["summary"])
+    add("meta", f"#{item['id']} · {item['status']} · added {item['added']} · worked {age(item['last_worked'])}")
+    add("head", "Why")
+    add("text", item["why"] or "-")
+    add("head", "Job")
+    if job:
+        add("action", job_line(db, job), f"job:{job['id']}")
+    else:
+        add("text", job_name(db, item) or "none · e to set one")
+    add("head", "Session")
+    if skey(item):
+        add("action", session_line(item["agent"], item["session_id"], item.get("cwd")), f"session:{skey(item)}")
+        add("text", resume_cmd(item) or "")
+    else:
+        add("text", "no session id captured")
+    add("head", "Artifacts")
+    add("action", f"{len(arts)} to open" if arts else "none yet · enter to add one", "artifacts")
+    add("head", "Notes")
+    add("action", item.get("notes") or "Enter to add a note", "notes")
     return out
 
 

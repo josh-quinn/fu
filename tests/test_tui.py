@@ -154,17 +154,45 @@ def test_shift_r_on_a_job_without_sessions_goes_straight_to_the_start_dialog(see
 
 
 async def open_header(app, pilot, n: int) -> None:
-    """Jobs screen, step onto the headers, move to header n and press Enter."""
+    """Jobs screen: open column n's search (typing on a header or Enter in column mode both get here)."""
     await pilot.press("1")
+    app.filter_column(n)
+    await pilot.pause()
+
+
+async def onto_headers(app, pilot) -> None:
     for _ in range(30):  # the cursor can sit on any row: Up until it has stepped onto the headers
         if app.header is not None:
             break
         await pilot.press("up")
-    await pilot.press(*["right"] * n, "enter")
-    await pilot.pause()
 
 
-def test_enter_on_a_text_header_opens_a_live_filter_that_enter_locks(seeded):
+def test_enter_on_a_jobs_header_sorts_by_it_and_again_flips_the_order(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await onto_headers(app, pilot)
+        await pilot.press("right", "right", "right", "enter")  # Title
+        assert app.screen.__class__.__name__ != "Suggest" and app.jsort == ("title", False)
+        assert job_titles(app) == ["Backprop from scratch", "ReLU derivative bug"]
+        await pilot.press("enter")
+        assert app.jsort == ("title", True)
+        assert job_titles(app) == ["ReLU derivative bug", "Backprop from scratch"]
+
+    drive(steps)
+
+
+def test_typing_on_a_header_still_starts_its_search(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await onto_headers(app, pilot)
+        await pilot.press("right", "right", "right", "r")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "Suggest" and app.jfilters == {"title": {"text": "r"}}
+
+    drive(steps)
+
+
+def test_a_text_column_search_filters_live_and_enter_locks(seeded):
     async def steps(app, pilot):
         await open_header(app, pilot, 3)  # Title
         assert app.screen.__class__.__name__ == "Suggest"
@@ -356,8 +384,7 @@ def test_picker_clear_removes_the_filter_and_escape_leaves_it_alone(seeded):
         await open_header(app, pilot, 4)
         await pilot.press("escape")
         assert app.jfilters["added"]["label"] == "Jan 2026"
-        await pilot.press("enter")  # still on the Added header: reopen it
-        await pilot.pause()
+        await open_header(app, pilot, 4)  # reopen it
         await pilot.press("right", "right", "right", "right", "enter")  # to Clear
         await pilot.pause()
         assert app.jfilters == {}
@@ -824,7 +851,7 @@ def test_enter_on_artifacts_lists_them_and_enter_opens_one_in_its_app(epic_board
         await pilot.press("enter")
         await pilot.pause()
         assert app.screen.__class__.__name__ == "ArtifactList"
-        assert [a["label"] for a in app.screen.arts] == ["Prod runbook"]
+        assert app.screen.rows == [("live", str(epic_board["runbook"]))]
         await pilot.press("enter")
         assert opened == [str(epic_board["runbook"])]
         await pilot.press("escape")
@@ -834,23 +861,62 @@ def test_enter_on_artifacts_lists_them_and_enter_opens_one_in_its_app(epic_board
     drive(steps)
 
 
-def test_x_hides_a_wrongly_listed_artifact_for_good(epic_board):
+def test_x_hides_a_wrong_guess_but_keeps_it_under_hidden_where_x_brings_it_back(epic_board):
+    from fu import summary
+
+    def state():
+        db = core.load_db()
+        job = core.job_by_ref(db, "ML-1")
+        return [a["path"] for a in summary.job_artifacts(db, job)], summary.hidden_artifacts(db, job)
+
     async def steps(app, pilot):
         await open_panel(app, pilot)
         await goto_entry(app, pilot, "artifacts")
         await pilot.press("enter", "x")
         await pilot.pause()
-        from fu import artifacts, summary
+        runbook = str(epic_board["runbook"])
+        assert state() == ([], [runbook])
+        assert ("hidden", runbook) in app.screen.rows
+        await pilot.press("x")  # the cursor sits on the hidden one now
+        await pilot.pause()
+        assert state() == ([runbook], [])
 
-        db = core.load_db()
-        job = core.job_by_ref(db, "ML-1")
-        assert summary.job_artifacts(db, job) == []
-        assert (
-            str(epic_board["runbook"])
-            in next(i for i in db["items"] if i["summary"] == "softmax")["artifacts_dismissed"]
-        )
-        assert "artifacts" not in panel_keys(app)  # nothing left to open
-        assert artifacts  # (module imported for clarity)
+    drive(steps)
+
+
+def test_ctrl_z_undoes_hiding_an_artifact(epic_board):
+    async def steps(app, pilot):
+        await open_panel(app, pilot)
+        await goto_entry(app, pilot, "artifacts")
+        await pilot.press("enter", "x", "ctrl+z")
+        await pilot.pause()
+        assert app.screen.rows[0] == ("live", str(epic_board["runbook"]))
+
+    drive(steps)
+
+
+def test_artifacts_can_be_added_by_hand_even_when_there_are_none(isolated):
+    note = isolated / "cheats.md"
+    note.write_text("x")
+    db = core.load_db()
+    core.create_job(db, "Cheatsheet", "btw")
+    core.save_db(db)
+
+    async def steps(app, pilot):
+        await open_panel(app, pilot, "Cheatsheet")
+        await goto_entry(app, pilot, "artifacts")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "ArtifactList" and app.screen.rows == [("none", "")]
+        await pilot.press("a")
+        box = app.screen.query_one("#add-path")
+        box.value = str(note)
+        await pilot.press("escape")  # closes the suggestions first, not the list
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.rows == [("live", str(note))]
+        job = core.job_by_ref(core.load_db(), "Cheatsheet")
+        assert [a["path"] for a in job["artifacts"]] == [str(note)]
 
     drive(steps)
 
@@ -979,6 +1045,7 @@ def test_typing_on_a_header_starts_the_search_without_enter(seeded):
 def test_the_search_box_does_not_dim_the_board_behind_it(seeded):
     async def steps(app, pilot):
         await open_header(app, pilot, 3)
+        assert app.screen.__class__.__name__ == "Suggest"
         assert app.screen.styles.background.a == 0
 
     drive(steps)
@@ -1003,11 +1070,11 @@ async def to_row(app, pilot, title):
     await select_job(app, pilot, title)
 
 
-def test_enter_on_a_row_enters_column_mode_on_the_title_column(epic_board):
+def test_enter_on_a_row_enters_column_mode_on_the_id_column(epic_board):
     async def steps(app, pilot):
         await to_row(app, pilot, "Backprop")
         await pilot.press("enter")
-        assert app.col == 3 and app.screen.__class__.__name__ != "Confirm"
+        assert app.col == 0 and app.screen.__class__.__name__ != "Confirm"
         await pilot.press("left", "left", "left", "left", "left")
         assert app.col == 0  # stops at the first column
         await pilot.press(*["right"] * 9)
@@ -1026,7 +1093,7 @@ def test_up_and_down_in_column_mode_move_the_row_not_the_column(epic_board):
             await pilot.press(key)
             await pilot.pause()
             seen.add(app.current_job()["id"])
-        assert app.col == 3 and len(seen) == 2  # the other job was reached, the column never moved
+        assert app.col == 0 and len(seen) == 2  # the other job was reached, the column never moved
 
     drive(steps)
 
@@ -1034,7 +1101,7 @@ def test_up_and_down_in_column_mode_move_the_row_not_the_column(epic_board):
 def test_enter_enter_on_the_parent_column_shows_every_job_with_that_parent(epic_board):
     async def steps(app, pilot):
         await to_row(app, pilot, "Gradient check")
-        await pilot.press("enter", "left")  # Title -> Parent
+        await pilot.press("enter", "right", "right")  # ID -> Parent
         assert app.col == 2
         await pilot.press("enter")
         assert app.screen.__class__.__name__ == "Suggest"
@@ -1050,7 +1117,7 @@ def test_enter_enter_on_the_parent_column_shows_every_job_with_that_parent(epic_
 def test_typing_in_column_mode_searches_that_column(epic_board):
     async def steps(app, pilot):
         await to_row(app, pilot, "Backprop")
-        await pilot.press("enter", "x")
+        await pilot.press("enter", "right", "right", "right", "x")  # ID -> Title
         assert app.screen.__class__.__name__ == "Suggest"
         assert app.screen.query_one(Input).value == "x" and app.jfilters == {"title": {"text": "x"}}
 
@@ -1060,7 +1127,7 @@ def test_typing_in_column_mode_searches_that_column(epic_board):
 def test_escape_in_column_mode_brings_back_all_results_then_leaves(epic_board):
     async def steps(app, pilot):
         await to_row(app, pilot, "Gradient check")
-        await pilot.press("enter", "left", "enter", "enter")
+        await pilot.press("enter", "right", "right", "enter", "enter")
         assert app.jfilters
         await pilot.press("escape")
         assert not app.jfilters and app.col == 2
@@ -1074,7 +1141,7 @@ def test_escape_in_column_mode_brings_back_all_results_then_leaves(epic_board):
 def test_enter_on_a_date_column_opens_the_picker_on_that_rows_date(epic_board):
     async def steps(app, pilot):
         await to_row(app, pilot, "Backprop")
-        await pilot.press("enter", "right")  # Title -> Added
+        await pilot.press("enter", *["right"] * 4)  # ID -> Added
         await pilot.press("enter")
         assert app.screen.__class__.__name__ == "DatePick"
 
@@ -1085,7 +1152,7 @@ async def enter_column_mode(app, pilot):
     await to_row(app, pilot, "Backprop")
     await pilot.press("enter")
     await pilot.pause()
-    assert app.col == 3
+    assert app.col == 0
 
 
 def test_plain_letters_type_in_column_mode_but_ctrl_runs_shortcuts(epic_board):
@@ -1369,5 +1436,143 @@ def test_dragging_the_panels_left_edge_resizes_it(epic_board):
         await pilot.hover(offset=(p.region.x - 40, 5))  # not dragging any more: nothing moves
         await pilot.pause()
         assert p.size.width > wide + 10 and not p.dragging
+
+    drive(steps)
+
+
+# ---- the Board shares column mode and the summary panel with Jobs
+
+
+def test_enter_on_a_board_row_enters_column_mode_and_shift_r_resumes(seeded):
+    async def steps(app, pilot):
+        await pilot.press("enter")
+        assert app.view == "board" and app.col == 0 and app.ran == []
+        await pilot.press("escape", "R")
+        await pilot.pause()
+        assert len(app.ran) == 1 and "--resume" in app.ran[0]
+
+    drive(steps)
+
+
+def test_board_column_mode_enter_enter_shows_every_task_of_that_job(seeded):
+    async def steps(app, pilot):
+        table = app.query_one("#table", DataTable)
+        while app.table_item()["summary"] != "Vectorise softmax":
+            await pilot.press("down")
+        await pilot.press("enter", "right", "right", "enter")  # ID -> Job, search its own value
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "Suggest"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.bfilters == {"job": {"text": "Backprop from scratch"}}
+        assert sorted(str(table.get_row_at(n)[3]) for n in range(table.row_count)) == [
+            "Vectorise softmax",
+            "Write gradient check",
+        ]
+        await pilot.press("escape")
+        assert app.bfilters == {} and app.col == 2
+
+    drive(steps)
+
+
+def test_right_on_a_board_row_enters_its_panel_and_the_job_entry_jumps_to_jobs(seeded):
+    async def steps(app, pilot):
+        while app.table_item()["summary"] != "Vectorise softmax":
+            await pilot.press("down")
+        await pilot.press("right")
+        await pilot.pause()
+        board_panel = app.query_one("#board-detail")
+        assert app.focused is board_panel and app.in_panel
+        keys = [board_panel.get_option_at_index(n).id for n in range(board_panel.option_count)]
+        assert [k for k in keys if k] == [
+            "job:1",
+            "session:copilot:bbbb2222-0000-0000-0000-000000000002",
+            "artifacts",
+            "notes",
+        ]
+        await pilot.press("enter")  # on the job
+        await pilot.pause()
+        assert app.view == "jobs" and app.current_job()["name"] == "Backprop from scratch"
+
+    drive(steps)
+
+
+def test_a_board_tasks_session_entry_offers_resume(seeded):
+    async def steps(app, pilot):
+        while app.table_item()["summary"] != "Vectorise softmax":
+            await pilot.press("down")
+        await pilot.press("right", "down", "enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "SessionActions"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.ran == ["cd /d && copilot --resume=bbbb2222-0000-0000-0000-000000000002"]
+
+    drive(steps)
+
+
+def test_the_picked_header_is_orange(seeded):
+    from fu.tui import HEADER_PICKED
+
+    async def steps(app, pilot):
+        await pilot.press("1", "enter")
+        label = list(jobs_table(app).columns.values())[0].label
+        assert str(label.style) == HEADER_PICKED
+
+    drive(steps)
+
+
+# ---- the job form
+
+
+def test_the_parent_field_searches_jobs_by_id_or_name(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await select_job(app, pilot, "ReLU derivative bug")
+        await pilot.press("e")
+        await pilot.pause()
+        form = app.screen
+        form.query_one("#row-parent").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        box = form.query_one("#completion")
+        assert box.display and box.values == ["J1"]  # every other job; never itself
+        await pilot.press(*"back")
+        await pilot.pause()
+        assert box.values == ["J1"]
+        await pilot.press("enter", "enter")  # take the pick, then leave the field
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        db = core.load_db()
+        assert core.job_by_ref(db, "ReLU derivative bug")["parent_id"] == 1
+
+    drive(steps)
+
+
+def test_the_home_folder_is_saved_and_shown_with_a_tilde(seeded, isolated):
+    home = isolated / "home" / "repo"
+    home.mkdir(parents=True)
+
+    async def steps(app, pilot):
+        await pilot.press("1")
+        await select_job(app, pilot, "ReLU derivative bug")
+        await pilot.press("e")
+        await pilot.pause()
+        form = app.screen
+        form.query_one("#row-home").focus()
+        await pilot.press("enter", *"~/re")
+        await pilot.pause()
+        assert form.query_one("#completion").values == ["~/repo/"]
+        await pilot.press("enter", "enter", "ctrl+s")
+        await pilot.pause()
+        assert core.job_by_ref(core.load_db(), "ReLU derivative bug")["home"] == str(home.resolve())
+
+    drive(steps)
+
+
+def test_a_quick_right_straight_after_enter_moves_the_column_not_into_the_panel(seeded):
+    async def steps(app, pilot):
+        await pilot.press("1", "enter", "right")
+        assert app.col == 1 and not app.in_panel
 
     drive(steps)

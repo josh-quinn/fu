@@ -116,8 +116,8 @@ def test_a_job_without_children_or_sessions_omits_those_sections(isolated):
     job = core.create_job(db, "Cheatsheet", "btw")
     e = summary.build(db, job)
     assert not {"Jobs", "Sessions"} & set(texts(e, "head"))
-    assert keys(e) == ["notes"]  # nothing to jump to, nothing to open
-    assert "none yet" in texts(e)
+    assert keys(e) == ["artifacts", "notes"]  # nothing to jump to; artifacts can still be added
+    assert "none yet · enter to add one" in texts(e)
 
 
 def test_there_is_no_restart_entry_since_the_sessions_list_covers_it(board):
@@ -193,3 +193,37 @@ def test_open_path_reports_failure_instead_of_raising(monkeypatch):
 
     monkeypatch.setattr(artifacts.subprocess, "Popen", boom)
     assert artifacts.open_path("/a/x.md") is False
+
+
+def test_a_hidden_job_artifact_is_kept_on_record_and_can_come_back(board, isolated):
+    db, epic = board
+    note = isolated / "runbook.md"
+    note.write_text("x")
+    artifacts.add_manual(next(i for i in db["items"] if i["summary"] == "grads"), str(note))
+    path = str(note)
+    summary.dismiss_job_artifact(db, epic, path)
+    assert path not in [a["path"] for a in summary.job_artifacts(db, epic)]
+    assert summary.hidden_artifacts(db, epic) == [path]
+    summary.restore_job_artifact(db, epic, path)
+    assert path in [a["path"] for a in summary.job_artifacts(db, epic)] and summary.hidden_artifacts(db, epic) == []
+
+
+def test_artifacts_added_to_a_job_by_hand_are_listed_and_can_be_taken_back(isolated):
+    note = isolated / "cheats.md"
+    note.write_text("x")
+    db = core.load_db()
+    job = core.create_job(db, "Cheatsheet", "btw")
+    artifacts.add_manual(job, str(note))
+    assert [a["path"] for a in summary.job_artifacts(db, job)] == [str(note)]
+    artifacts.remove_manual(job, str(note))
+    assert summary.job_artifacts(db, job) == []
+
+
+def test_the_board_panel_for_a_task_links_its_job_session_artifacts_and_notes(board):
+    db, epic = board
+    item = next(i for i in db["items"] if i.get("session_id"))
+    e = summary.build_item(db, item)
+    assert (
+        keys(e)[0].startswith("job:") and keys(e)[1].startswith("session:") and keys(e)[-2:] == ["artifacts", "notes"]
+    )
+    assert "Session" in texts(e, "head") and any("--resume" in t for t in texts(e))

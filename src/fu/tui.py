@@ -18,9 +18,11 @@ from fu.core import (
     clip,
     create_job,
     date_range,
+    descendants,
     filter_jobs,
     fmt_date,
     heat,
+    home_path,
     idle_days,
     job_by_ref,
     job_label,
@@ -35,10 +37,9 @@ from fu.core import (
     remove_job,
     resume_cmd,
     save_db,
-    session_label,
     set_parent,
-    skey,
     sort_board,
+    sort_jobs,
     suggestions,
     today,
     update,
@@ -54,7 +55,9 @@ JOB_COLUMNS_UI = [
     ("added", "Added"),
     ("last_worked", "Last worked"),
 ]
+ORANGE = "#ffa62b"  # the cursor colour: the highlighted row, and the header picked on the headers or in column mode
 COLUMN_TINT = "on grey19"  # background of the column picked in column mode
+HEADER_PICKED = f"bold black on {ORANGE}"
 LIST_ROWS_TYPING = 6
 LIST_ROWS_EMPTY = 15
 COLUMNS = [
@@ -247,8 +250,8 @@ def build_app():
     class RowForm(ModalScreen["dict | None"]):
         """Rows you move through with the arrows. Enter edits a row, Enter again leaves it.
 
-        FIELDS are (key, label, mode); mode is "text", "readonly" (greyed, skipped by the
-        arrows) or a tuple of options (a dropdown).
+        FIELDS are (key, label, mode); mode is "text", "readonly" (greyed, skipped by the arrows), a
+        tuple of options (a dropdown), "job" (searchable list of jobs) or "folder" (path with suggestions).
         """
 
         BINDINGS = [
@@ -260,14 +263,15 @@ def build_app():
         ]
         FIELDS: list[tuple[str, str, object]] = []
 
-        def __init__(self, heading: str, values: dict | None = None) -> None:
+        def __init__(self, heading: str, values: dict | None = None, jobs: list[tuple[str, str]] | None = None) -> None:
             super().__init__()
             self.heading = heading
             self.vals = {k: str((values or {}).get(k) or "") for k, _, _ in self.FIELDS}
+            self.jobs = jobs or []  # (label, name) the "job" fields choose from
             self.editing: str | None = None
 
         def compose(self) -> ComposeResult:
-            with Vertical(classes="dialog"):
+            with Vertical(classes="frame"), Vertical(classes="dialog"):
                 yield Label(f"[b]{self.heading}[/]")
                 for key, label, mode in self.FIELDS:
                     yield Label(
@@ -283,7 +287,12 @@ def build_app():
                         )
                     elif mode == "text":
                         yield Input(value=self.vals[key], id=f"edit-{key}")
+                    elif mode == "job":
+                        yield PickInput(self.vals[key], lambda: self.jobs, id=f"edit-{key}")
+                    elif mode == "folder":
+                        yield PathInput(self.vals[key], id=f"edit-{key}")
                 yield Label("[dim]↑↓ move · enter edit / confirm · ctrl+s save · esc back[/]", classes="field")
+            yield Completion()
 
         def on_mount(self) -> None:
             for editor in self.query(".dialog Input, .dialog Select"):
@@ -296,7 +305,8 @@ def build_app():
 
         def shown(self, key: str) -> str:
             value = self.vals[key]
-            return escape(value) if value else "[dim]-[/]"
+            name = dict(self.jobs).get(value) if {k: m for k, _, m in self.FIELDS}[key] == "job" else None
+            return (escape(value) + (f"  [dim]{escape(name)}[/]" if name else "")) if value else "[dim]-[/]"
 
         def rows(self) -> list:
             return [r for r in self.query(FieldRow) if r.can_focus]
@@ -381,7 +391,8 @@ def build_app():
             ("name", "Title", "text"),
             ("ext_id", "ID (optional, e.g. a Jira key)", "text"),
             ("kind", "Type", tuple(KINDS)),
-            ("parent", "Parent job (name or id; blank for none)", "text"),
+            ("parent", "Parent job (type to search; blank for none)", "job"),
+            ("home", "Home folder (new sessions start here)", "folder"),
             ("description", "Description", "text"),
         ]
 
@@ -706,63 +717,6 @@ def build_app():
         def action_cursor_up(self) -> None:
             if self.highlighted is None or self.highlighted > min(self.actionable(), default=0):
                 super().action_cursor_up()
-
-    class ArtifactList(ModalScreen[None]):
-        """Everything the job's sessions left behind. Enter opens one in its app; x hides a wrong guess."""
-
-        BINDINGS = [
-            Binding("escape,left", "close", "Close"),
-            Binding("x", "hide", "Hide this one"),
-        ]
-
-        def __init__(self, arts: list[dict]) -> None:
-            super().__init__()
-            self.arts = arts
-
-        def compose(self) -> ComposeResult:
-            with Vertical(classes="dialog wide"):
-                yield Label("[b]Artifacts[/] [dim]enter opens · x hides a wrong guess · esc closes[/]")
-                yield OptionList(id="arts")
-
-        def on_mount(self) -> None:
-            self.fill()
-            self.query_one(OptionList).focus()
-
-        def fill(self) -> None:
-            opts = self.query_one(OptionList)
-            opts.clear_options()
-            home = str(Path.home())
-            opts.add_options(
-                [
-                    Option(
-                        Text.from_markup(
-                            f"{a['kind']:<6} [b]{escape(a['label'])}[/]  [dim]{escape(a['path'].replace(home, '~'))}[/]"
-                        ),
-                        id=str(n),
-                    )
-                    for n, a in enumerate(self.arts)
-                ]
-            )
-            opts.highlighted = 0 if self.arts else None
-
-        def on_option_list_option_selected(self, event) -> None:
-            event.stop()
-            art = self.arts[int(event.option.id)]
-            if not artifacts.open_path(art["path"]):
-                self.notify(f"Could not open {art['path']}", severity="error")
-
-        def action_hide(self) -> None:
-            opts = self.query_one(OptionList)
-            if opts.highlighted is None:
-                return
-            art = self.arts.pop(opts.highlighted)
-            self.app.dismiss_artifact(art)
-            self.fill()
-            if not self.arts:
-                self.dismiss(None)
-
-        def action_close(self) -> None:
-            self.dismiss(None)
 
     def chips(options: list[tuple[str, str]], on: str) -> str:
         """A row of buttons; the chosen one is lit."""
@@ -1214,9 +1168,140 @@ def build_app():
             else:
                 self.dismiss(None)
 
+    class ArtifactList(ModalScreen[None]):
+        """What a job's sessions left behind. Enter opens one; x hides a wrong guess (it moves to Hidden,
+        where x brings it back); ctrl+z undoes the last change; a adds a file or folder by hand."""
+
+        BINDINGS = [
+            Binding("escape", "close", "Close"),
+            Binding("x", "toggle_hidden", "Hide / bring back"),
+            Binding("a", "add", "Add"),
+            Binding("ctrl+z", "undo", "Undo"),
+        ]
+
+        def __init__(self, ops: dict) -> None:
+            super().__init__()
+            self.ops = ops  # list() -> (artifacts, hidden paths); hide, restore, add, remove (path)
+            self.rows: list[tuple[str, str]] = []  # (state, path) behind each line; state: live | hidden
+            self.undo: list[tuple[str, str]] = []  # (op that reverses it, path)
+
+        def compose(self) -> ComposeResult:
+            with Vertical(classes="frame"), Vertical(classes="dialog wide"):
+                yield Label("[b]Artifacts[/] [dim]enter opens · x hides or brings back · a adds · ctrl+z undo[/]")
+                yield OptionList(id="arts")
+                yield Label("Add a file or folder", id="add-label", classes="field")
+                yield PathInput("", files=True, id="add-path")
+            yield Completion()
+
+        def on_mount(self) -> None:
+            self.query_one("#add-label").display = False
+            self.query_one("#add-path").display = False
+            self.fill()
+            self.query_one(OptionList).focus()
+
+        def fill(self, at: int | None = None) -> None:
+            opts = self.query_one("#arts", OptionList)
+            opts.clear_options()
+            live, hidden = self.ops["list"]()
+            home = str(Path.home())
+            self.rows = []
+            options = []
+            for a in live:
+                self.rows.append(("live", a["path"]))
+                options.append(
+                    Option(
+                        Text.from_markup(
+                            f"{a['kind']:<6} [b]{escape(a['label'])}[/]  [dim]{escape(a['path'].replace(home, '~'))}[/]"
+                        )
+                    )
+                )
+            if not live:
+                self.rows.append(("none", ""))
+                options.append(Option(Text("No artifacts yet. a adds one.", style="dim"), disabled=True))
+            if hidden:
+                self.rows.append(("none", ""))
+                options.append(
+                    Option(Text(f"\nHidden ({len(hidden)})  x brings one back", style="dim bold"), disabled=True)
+                )
+                for path in hidden:
+                    self.rows.append(("hidden", path))
+                    options.append(Option(Text(f"       {path.replace(home, '~')}", style="dim")))
+            opts.add_options(options)
+            pickable = [n for n, (state, _) in enumerate(self.rows) if state != "none"]
+            opts.highlighted = (
+                (min(pickable, key=lambda n: abs(n - at)) if at is not None else pickable[0]) if pickable else None
+            )
+
+        def current(self) -> tuple[str, str] | None:
+            opts = self.query_one("#arts", OptionList)
+            if opts.highlighted is None or self.rows[opts.highlighted][0] == "none":
+                return None
+            return self.rows[opts.highlighted]
+
+        def on_option_list_option_selected(self, event) -> None:
+            event.stop()
+            row = self.current()
+            if row and not artifacts.open_path(row[1]):
+                self.notify(f"Could not open {row[1]}", severity="error")
+
+        def action_toggle_hidden(self) -> None:
+            row = self.current()
+            if not row:
+                return
+            state, path = row
+            if state == "live":
+                self.ops["hide"](path)
+                self.undo.append(("restore", path))
+            else:
+                self.ops["restore"](path)
+                self.undo.append(("hide", path))
+            self.fill(self.query_one("#arts", OptionList).highlighted)
+
+        def action_undo(self) -> None:
+            if not self.undo:
+                self.notify("Nothing to undo")
+                return
+            op, path = self.undo.pop()
+            self.ops[op](path)
+            self.fill(self.query_one("#arts", OptionList).highlighted)
+
+        def action_add(self) -> None:
+            self.query_one("#add-label").display = True
+            box = self.query_one("#add-path", PathInput)
+            box.display = True
+            box.value = "~/"
+            box.focus()
+            box.cursor_position = 2
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            event.stop()
+            path = Path(event.value.strip()).expanduser()
+            if not event.value.strip() or not path.exists():
+                self.notify(f"{event.value.strip() or 'That'} does not exist", severity="error")
+                return
+            self.ops["add"](str(path))
+            self.undo.append(("remove", str(path)))
+            self.close_add()
+            self.fill()
+
+        def close_add(self) -> None:
+            self.query_one("#add-label").display = False
+            self.query_one("#add-path").display = False
+            self.query_one("#arts", OptionList).focus()
+
+        def check_action(self, action: str, parameters: tuple) -> bool | None:
+            adding = self.query_one("#add-path").display
+            return not (adding and action in ("toggle_hidden", "add"))  # letters belong to the path box
+
+        def action_close(self) -> None:
+            if self.query_one("#add-path").display:
+                self.close_add()
+            else:
+                self.dismiss(None)
+
     class HeaderTable(DataTable):
-        """Up from the first row steps onto the column headers; there the arrows pick a
-        header, Enter acts on it (sort on the Board, filter on Jobs) and Down returns to the rows."""
+        """Up from the first row steps onto the column headers; there the arrows pick a header, Enter
+        sorts by it, typing searches it, and Down returns to the rows. Enter on a row starts column mode."""
 
         def action_cursor_up(self) -> None:
             h = self.app.header
@@ -1254,22 +1339,22 @@ def build_app():
                 self.app.tab_move(1)
             elif h is not None:
                 self.app.header_move(1)
-            elif self.app.view == "jobs":
+            else:
                 self.app.focus_panel()
 
         def on_key(self, event) -> None:
-            """Typing on a Jobs header starts the search right away, without Enter."""
+            """Typing in column mode, or on a header, starts that column's search right away."""
             app = self.app
             if ("+" in event.key and event.key != "plus") or event.key in ("R", "greater_than_sign"):
                 return  # a chord (Ctrl+E) or Shift+R / Shift+. is a shortcut, never text for the search
-            if app.view == "jobs" and app.col is not None and event.is_printable:
+            if app.col is not None and event.is_printable:
                 if event.character and event.character != " ":
                     event.stop()
                     event.prevent_default()
                     app.column_search(event.character)
                 return
-            if app.view == "jobs" and app.header is not None and app.header >= 0 and event.is_printable:
-                col = JOB_COLUMNS_UI[app.header][0]
+            if app.header is not None and app.header >= 0 and event.is_printable:
+                col = app.cols()[app.header][0]
                 if col not in DATE_COLUMNS and event.character and event.character != " ":
                     event.stop()
                     event.prevent_default()
@@ -1281,7 +1366,7 @@ def build_app():
             elif self.app.header is not None and self.app.header >= 0:
                 self.app.header_enter()
             else:
-                super().action_select_cursor()
+                self.app.enter_column()  # at once, not via RowSelected, so a quick → after it moves the column
 
     class Board(App):
         TITLE = "follow-ups"
@@ -1340,8 +1425,12 @@ def build_app():
                       scrollbar-size-vertical: 1; }
         .peek { overlay: screen; position: absolute; height: auto; max-height: 14; padding: 0 1;
                 background: $panel; border: round $accent; }
-        #jobs-detail { background: $background; border: none; border-left: solid $primary 40%; padding: 1 1; }
-        #jobs-detail > .option-list--option-disabled { color: $text; }
+        #jobs-detail, #board-detail { background: $background; border: none; border-left: solid $primary 40%;
+                                      padding: 1 1; }
+        #jobs-detail > .option-list--option-disabled, #board-detail > .option-list--option-disabled { color: $text; }
+        HeaderTable > .datatable--cursor { background: #ffa62b 30%; color: $text; text-style: bold; }
+        HeaderTable:focus > .datatable--cursor { background: #ffa62b 40%; }
+        SummaryList > .option-list--option-highlighted { background: #ffa62b 30%; color: $text; text-style: bold; }
         .row { height: 1; padding: 0 1; background: $boost; }
         .row:focus { background: $primary 35%; text-style: bold; }
         .row.ro { background: transparent; color: $text-disabled; }
@@ -1362,7 +1451,10 @@ def build_app():
             self.in_panel = False  # the Jobs summary panel has the cursor, not the rows
             self.panel_shown = True  # the detail / summary panel beside the table (shift+. toggles it)
             self.col: int | None = None  # Jobs column under column mode (Enter on a row), None outside it
-            self.shown_job: int | None = None  # whose summary the panel currently shows
+            self.shown_job: int | None = None  # whose summary the Jobs panel currently shows
+            self.shown_item: int | None = None  # whose details the Board panel currently shows
+            self.jsort: tuple[str, bool] = ("last_worked", True)  # Jobs: (column, descending)
+            self.bfilters: dict = {}  # Board column mode: column -> filter
             self.runner = self.run_suspended  # tests swap this for a recorder
 
         # ---- layout
@@ -1373,7 +1465,7 @@ def build_app():
             with ContentSwitcher(initial="board", id="views"):
                 with Horizontal(id="board"):
                     yield HeaderTable(id="table", cursor_type="row", zebra_stripes=False)
-                    yield Static(id="board-detail", classes="detail")
+                    yield SummaryList(id="board-detail", classes="detail")
                 with Horizontal(id="jobs"):
                     yield HeaderTable(id="jobs-table", cursor_type="row", zebra_stripes=False)
                     yield SummaryList(id="jobs-detail", classes="detail")
@@ -1436,9 +1528,56 @@ def build_app():
             return {**self.filters, "all": self.show_done}
 
         def visible_items(self) -> list[dict]:
-            return sort_board(
+            items = sort_board(
                 self.db, [i for i in self.db["items"] if matches(i, self.effective_filters())], *self.sort
             )
+            keep = {r["item"]["id"] for r in filter_jobs(self.board_rows(items), self.bfilters)}
+            return [i for i in items if i["id"] in keep]
+
+        def board_rows(self, items: list[dict] | None = None) -> list[dict]:
+            """The Board's rows as column -> text, what column mode searches."""
+            items = (
+                items if items is not None else [i for i in self.db["items"] if matches(i, self.effective_filters())]
+            )
+            return [
+                {
+                    "item": i,
+                    "id": str(i["id"]),
+                    "status": i["status"],
+                    "job": job_name(self.db, i),
+                    "summary": i["summary"],
+                    "added": i["added"],
+                    "last_worked": i["last_worked"],
+                }
+                for i in items
+            ]
+
+        def jobs_visible(self) -> list[dict]:
+            return sort_jobs(filter_jobs(job_rows(self.db), self.jfilters), *self.jsort)
+
+        # what differs between the two screens, so headers, column mode and the panel serve both
+        def cols(self) -> list[tuple[str, str]]:
+            return COLUMNS if self.view == "board" else JOB_COLUMNS_UI
+
+        def vfilters(self) -> dict:
+            return self.bfilters if self.view == "board" else self.jfilters
+
+        def all_rows(self) -> list[dict]:
+            return self.board_rows() if self.view == "board" else job_rows(self.db)
+
+        def table_id(self) -> str:
+            return "#table" if self.view == "board" else "#jobs-table"
+
+        def panel_id(self) -> str:
+            return "#board-detail" if self.view == "board" else "#jobs-detail"
+
+        def cursor_row(self) -> dict | None:
+            """The highlighted row as column -> text."""
+            if self.view == "board":
+                item = self.table_item()
+                return next((r for r in self.board_rows([item])), None) if item else None
+            job = self.current_job()
+            return next((r for r in job_rows(self.db) if r["job"]["id"] == job["id"]), None) if job else None
 
         def table_item(self) -> dict | None:
             key = self.cursor_key("#table")
@@ -1470,32 +1609,21 @@ def build_app():
             )
             items = self.db["items"]
             n = {s: sum(i["status"] == s for i in items) for s in STATUSES}
-            chips = self.filter_chips()
+            chips = " · ".join(c for c in (self.filter_chips(), self.column_chips()) if c)
             self.query_one("#bar", Static).update(
                 f"{n['doing']} doing · {n['todo']} todo · {n['done']} done"
                 + ("" if self.show_done or not n["done"] else "  [dim](done hidden: . to show)[/]")
-                + (f"   [b]filter:[/] {chips}  [dim](c clears)[/]" if chips and self.view == "board" else "")
-                + (
-                    f"   [b]filter:[/] {self.job_filter_chips()}  [dim](c clears)[/]"
-                    if self.jfilters and self.view == "jobs"
-                    else ""
-                )
-                + (
-                    "   [b]panel:[/] [dim]↑ ↓ move · enter opens · ← back to the rows[/]"
-                    if self.in_panel and self.view == "jobs"
-                    else ""
-                )
+                + (f"   [b]filter:[/] {chips}  [dim](c clears)[/]" if chips else "")
+                + ("   [b]panel:[/] [dim]↑ ↓ move · enter opens · ← back to the rows[/]" if self.in_panel else "")
                 + (
                     "   [b]column:[/] [dim]← → pick · ↑ ↓ row · type or enter searches · esc all/leave[/]"
-                    if self.col is not None and self.view == "jobs"
+                    if self.col is not None
                     else ""
                 )
                 + (
                     "   [b]screens:[/] [dim]← → switch between Jobs and Board · ↓ to the headers[/]"
                     if self.header == -1
-                    else "   [b]headers:[/] [dim]← → move · enter sorts · ↑ screens · ↓ back to rows[/]"
-                    if self.header is not None and self.view == "board"
-                    else "   [b]headers:[/] [dim]← → move · enter filters · ↑ screens · ↓ back to rows[/]"
+                    else "   [b]headers:[/] [dim]← → move · enter sorts · type searches · ↑ screens · ↓ rows[/]"
                     if self.header is not None
                     else ""
                 )
@@ -1503,6 +1631,8 @@ def build_app():
             self.refresh_bindings()
 
         def filter_chips(self) -> str:
+            if self.view != "board":
+                return ""
             f, parts = self.filters, []
             if f.get("text"):
                 parts.append(f"“{escape(f['text'])}”")
@@ -1520,21 +1650,35 @@ def build_app():
                 parts.append(f"worked ≤ {f['recent']}d ago")
             return " · ".join(parts)
 
+        def column_chips(self) -> str:
+            labels = dict(self.cols())
+            return " · ".join(
+                f"{labels[c]}: " + (f"“{escape(f['text'])}”" if "text" in f else escape(f["label"]))
+                for c, f in self.vfilters().items()
+            )
+
+        def header_text(self, view: str, n: int, col: str, label: str) -> Text:
+            """A column header: the sort arrow, a dot when filtered, orange while picked."""
+            key, desc = self.sort if view == "board" else self.jsort
+            filtered = col in (self.bfilters if view == "board" else self.jfilters)
+            mark = ((" ▼" if desc else " ▲") if key == col else "") + (" ●" if filtered else "")
+            picked = self.view == view and (self.header == n or self.col == n)
+            return Text(label + mark, style=HEADER_PICKED if picked else ("bold" if key == col or filtered else ""))
+
         # ---- board view
         def refresh_table(self, keep: str | None) -> None:
             keep = keep or (str(self.table_item()["id"]) if self.table_item() else None)
             visible = self.visible_items()
-            table = self.query_one(DataTable)
+            table = self.query_one("#table", DataTable)
             table.clear(columns=True)
             for n, (col, label) in enumerate(COLUMNS):
-                mark = (" ▼" if self.sort[1] else " ▲") if self.sort[0] == col else ""
-                style = "reverse bold" if self.header == n else ("bold" if self.sort[0] == col else "")
-                table.add_column(Text(label + mark, style=style), key=col)
-            table.show_cursor = self.header is None
+                table.add_column(self.header_text("board", n, col, label), key=col)
+            table.show_cursor = not (self.header is not None and self.view == "board")
+            tint = self.col if self.view == "board" else None
             for i in visible:
                 label, colour = BADGE[i["status"]]
                 job = next((j for j in self.db["jobs"] if j["id"] == i.get("job_id")), None)
-                table.add_row(
+                cells = [
                     Text(str(i["id"]), style="dim"),
                     Text(label, style=colour),
                     Text(
@@ -1543,50 +1687,53 @@ def build_app():
                     Text(i["summary"], style="dim" if i["status"] == "done" else "bold"),
                     Text(i["added"], style="dim"),
                     Text(f"{i['last_worked']}  {age(i['last_worked'])}", style=heat(idle_days(i))),
-                    key=str(i["id"]),
-                )
+                ]
+                if tint is not None:
+                    cells[tint].stylize(COLUMN_TINT)  # column mode: the whole column stands out
+                table.add_row(*cells, key=str(i["id"]))
             ids = [str(i["id"]) for i in visible]
             if keep in ids:
                 table.move_cursor(row=ids.index(keep))
             self.show_board_detail()
 
-        def item_detail(self, item: dict) -> str:
-            cmd = resume_cmd(item)
-            job = job_name(self.db, item)
-            return (
-                f"[b]{escape(item['summary'])}[/]\n\n[dim]Why[/]\n{escape(item['why'] or '-')}\n\n"
-                f"[dim]Job[/]  {escape(job) if job else '-'}\n[dim]Session[/]  {escape(session_label(skey(item), [item]))}\n"
-                f"[dim]Added[/]  {item['added']}\n[dim]Last worked[/]  {item['last_worked']} ({age(item['last_worked'])})\n\n"
-                f"[dim]Restart[/]\n{escape(cmd) if cmd else '[dim]no session id captured[/]'}"
-                + (f"\n\n[dim]Notes[/]\n{escape(item['notes'])}" if item.get("notes") else "")
-            )
+        STYLES = {"title": "bold", "meta": "dim", "head": "dim bold", "text": "", "action": ""}
 
-        def show_board_detail(self) -> None:
+        def fill_panel(self, panel: "SummaryList", entries: list[dict]) -> None:
+            options, panel.full, panel.revealed = [], {}, None
+            for e in entries:
+                text = Text(("\n" if e["style"] == "head" else "") + e["text"], style=self.STYLES[e["style"]])
+                if e["key"] and e["key"] not in ("notes",) and e["style"] == "action":
+                    text.stylize("not dim")
+                if e["style"] == "action" and e["key"]:
+                    panel.full[e["key"]] = text
+                    text = panel.clip(text)
+                options.append(Option(text, id=e["key"], disabled=not e["enabled"]))
+            panel.add_options(options)
+
+        def show_board_detail(self, force: bool = True) -> None:
+            panel = self.query_one("#board-detail", SummaryList)
             item = self.table_item()
-            self.query_one("#board-detail", Static).update(
-                self.item_detail(item)
-                if item
-                else "[dim]Nothing here. Press [b]a[/] to add a follow-up, or [b]c[/] to clear filters.[/]"
-            )
+            shown = item["id"] if item else None
+            if not force and shown == self.shown_item and panel.option_count:
+                return
+            self.shown_item = shown
+            panel.clear_options()
+            if not item:
+                msg = "Nothing here. Press a to add a follow-up, or c to clear filters."
+                panel.add_options([Option(Text(msg, style="dim"), disabled=True)])
+                return
+            self.fill_panel(panel, summary.build_item(self.db, item))
 
         # ---- jobs view
         def refresh_jobs(self) -> None:
             keep = self.cursor_key("#jobs-table")
-            rows = filter_jobs(job_rows(self.db), self.jfilters)
+            rows = self.jobs_visible()
             table = self.query_one("#jobs-table", DataTable)
             table.clear(columns=True)
             for n, (col, label) in enumerate(JOB_COLUMNS_UI):
-                mark = " ●" if col in self.jfilters else ""
-                table.add_column(
-                    Text(
-                        label + mark,
-                        style="reverse bold"
-                        if (self.header == n or self.col == n) and self.view == "jobs"
-                        else ("bold" if col in self.jfilters else ""),
-                    ),
-                    key=col,
-                )
+                table.add_column(self.header_text("jobs", n, col, label), key=col)
             table.show_cursor = not (self.header is not None and self.view == "jobs")
+            tint = self.col if self.view == "jobs" else None
             for r in rows:
                 job = r["job"]
                 cells = [
@@ -1600,15 +1747,13 @@ def build_app():
                         style=heat(idle_days(r)),
                     ),
                 ]
-                if self.col is not None:
-                    cells[self.col].stylize(COLUMN_TINT)  # column mode: the whole column stands out
+                if tint is not None:
+                    cells[tint].stylize(COLUMN_TINT)  # column mode: the whole column stands out
                 table.add_row(*cells, key=str(job["id"]))
             ids = [str(r["job"]["id"]) for r in rows]
             if keep in ids:
                 table.move_cursor(row=ids.index(keep))
             self.show_jobs_detail()
-
-        STYLES = {"title": "bold", "meta": "dim", "head": "dim bold", "text": "", "action": ""}
 
         def show_jobs_detail(self, force: bool = True) -> None:
             """Rebuild the panel for the job under the cursor. A row-highlight event passes force=False so
@@ -1628,25 +1773,19 @@ def build_app():
                 )
                 panel.add_options([Option(Text(msg, style="dim"), disabled=True)])
                 return
-            options, panel.full, panel.revealed = [], {}, None
-            for e in summary.build(self.db, job):
-                text = Text(("\n" if e["style"] == "head" else "") + e["text"], style=self.STYLES[e["style"]])
-                if e["key"] and e["key"] not in ("notes",) and e["style"] == "action":
-                    text.stylize("not dim")
-                if e["style"] == "action" and e["key"]:
-                    panel.full[e["key"]] = text
-                    text = panel.clip(text)
-                options.append(Option(text, id=e["key"], disabled=not e["enabled"]))
-            panel.add_options(options)
+            self.fill_panel(panel, summary.build(self.db, job))
+
+        def show_detail(self) -> None:
+            self.show_board_detail() if self.view == "board" else self.show_jobs_detail()
 
         def first_enabled(self) -> int | None:
-            panel = self.query_one("#jobs-detail", SummaryList)
+            panel = self.query_one(self.panel_id(), SummaryList)
             return next((n for n in range(panel.option_count) if not panel.get_option_at_index(n).disabled), None)
 
         def focus_panel(self, key: str | None = None) -> None:
             """Put the cursor in the panel, on the entry with this key (else the first actionable one)."""
-            panel = self.query_one("#jobs-detail", SummaryList)
-            if self.current_job() is None:
+            panel = self.query_one(self.panel_id(), SummaryList)
+            if (self.current_job() if self.view == "jobs" else self.table_item()) is None:
                 return
             if not self.panel_shown:
                 self.set_panel(True)
@@ -1657,58 +1796,94 @@ def build_app():
             self.update_chrome()
 
         def focus_rows(self) -> None:
-            self.query_one("#jobs-table", DataTable).focus()
+            self.query_one(self.table_id(), DataTable).focus()
             self.in_panel = False
             self.update_chrome()
 
         def select_job(self, job_id: int) -> None:
-            """Jump to a job's row (clearing filters that hide it) and stay in the panel."""
-            if not any(r["job"]["id"] == job_id for r in filter_jobs(job_rows(self.db), self.jfilters)):
+            """Jump to a job's row on the Jobs screen (clearing filters that hide it) and stay in the panel."""
+            if self.view != "jobs":
+                self.action_view("jobs")
+            if not any(r["job"]["id"] == job_id for r in self.jobs_visible()):
                 self.jfilters = {}
                 self.refresh_jobs()
-            rows = filter_jobs(job_rows(self.db), self.jfilters)
+            rows = self.jobs_visible()
             self.query_one("#jobs-table", DataTable).move_cursor(row=[r["job"]["id"] for r in rows].index(job_id))
             self.show_jobs_detail()
             self.update_chrome()
             self.call_after_refresh(self.focus_panel)
 
-        def dismiss_artifact(self, art: dict) -> None:
-            """Hide a wrongly detected artifact on every task that carries it."""
-            db = load_db()
-            job = next((j for j in db["jobs"] if j["id"] == (self.current_job() or {}).get("id")), None)
-            for item in db["items"]:
-                if job and item.get("job_id") == job["id"]:
-                    artifacts.dismiss(item, art["path"])
-            save_db(db)
-            self.db = db
-            self.show_jobs_detail()
-
+        # ---- the panels' entries
         def on_option_list_option_selected(self, event) -> None:
-            if event.option_list.id != "jobs-detail":
-                return
-            job, key = self.current_job(), event.option.id or ""
-            if not job:
-                return
-            if key == "notes":
-                self.edit_notes(job)
-            elif key == "artifacts":
-                self.push_screen(ArtifactList(summary.job_artifacts(self.db, job)))
-            elif key.startswith("job:"):
-                self.select_job(int(key.split(":", 1)[1]))
-            elif key.startswith("session:"):
-                self.session_actions(job, key.split(":", 1)[1])
+            key = event.option.id or ""
+            if event.option_list.id == "jobs-detail" and (job := self.current_job()):
+                if key == "notes":
+                    self.edit_notes(job)
+                elif key == "artifacts":
+                    self.open_artifacts(job=job)
+                elif key.startswith("job:"):
+                    self.select_job(int(key.split(":", 1)[1]))
+                elif key.startswith("session:"):
+                    self.session_actions(summary.session_target(self.db, job, key.split(":", 1)[1]))
+            elif event.option_list.id == "board-detail" and (item := self.table_item()):
+                if key == "notes":
+                    self.edit_notes(item=item)
+                elif key == "artifacts":
+                    self.open_artifacts(item=item)
+                elif key.startswith("job:"):
+                    self.select_job(int(key.split(":", 1)[1]))
+                elif key.startswith("session:"):
+                    self.session_actions(item)
 
-        def edit_notes(self, job: dict) -> None:
+        def edit_notes(self, job: dict | None = None, item: dict | None = None) -> None:
             def done(text: str | None) -> None:
-                if text is not None:
-                    db = load_db()
+                if text is None:
+                    return
+                db = load_db()
+                if job:
                     next(j for j in db["jobs"] if j["id"] == job["id"])["notes"] = text
-                    save_db(db)
-                    self.db = db
-                    self.show_jobs_detail()
-                    self.call_after_refresh(self.focus_panel, "notes")
+                else:
+                    next(i for i in db["items"] if i["id"] == item["id"])["notes"] = text
+                save_db(db)
+                self.db = db
+                self.show_detail()
+                self.call_after_refresh(self.focus_panel, "notes")
 
-            self.push_screen(NotesForm(job.get("notes", "")), done)
+            self.push_screen(NotesForm((job or item).get("notes", "")), done)
+
+        def open_artifacts(self, job: dict | None = None, item: dict | None = None) -> None:
+            def change(fn) -> None:
+                """Apply fn(db, owner) to the job or task as saved, then refresh the panel."""
+                db = load_db()
+                owner = (
+                    next(j for j in db["jobs"] if j["id"] == job["id"])
+                    if job
+                    else next(i for i in db["items"] if i["id"] == item["id"])
+                )
+                fn(db, owner)
+                save_db(db)
+                self.db = db
+                self.show_detail()
+
+            def listing() -> tuple[list[dict], list[str]]:
+                if job:
+                    fresh = next(j for j in self.db["jobs"] if j["id"] == job["id"])
+                    return summary.job_artifacts(self.db, fresh), summary.hidden_artifacts(self.db, fresh)
+                fresh = next(i for i in self.db["items"] if i["id"] == item["id"])
+                return artifacts.item_artifacts(fresh), list(fresh.get("artifacts_dismissed", []))
+
+            ops = {
+                "list": listing,
+                "hide": lambda path: change(
+                    lambda db, o: summary.dismiss_job_artifact(db, o, path) if job else artifacts.dismiss(o, path)
+                ),
+                "restore": lambda path: change(
+                    lambda db, o: summary.restore_job_artifact(db, o, path) if job else artifacts.restore(o, path)
+                ),
+                "add": lambda path: change(lambda db, o: artifacts.add_manual(o, path)),
+                "remove": lambda path: change(lambda db, o: artifacts.remove_manual(o, path)),
+            }
+            self.push_screen(ArtifactList(ops))
 
         # ---- running sessions: the board steps aside while the agent runs, then comes back
         def run_suspended(self, cmd: str) -> None:
@@ -1727,9 +1902,10 @@ def build_app():
         def resume(self, item_id: str) -> None:
             self.run_session(launch.prepare_resume(item_id))
 
-        def session_actions(self, job: dict, key: str) -> None:
-            item = summary.session_target(self.db, job, key)
-            if not item:
+        def session_actions(self, item: dict | None) -> None:
+            """Resume the session this task came from, or open its folder."""
+            if not item or not item.get("session_id"):
+                self.notify("No session recorded for this task", severity="warning")
                 return
 
             def done(choice: str | None) -> None:
@@ -1751,13 +1927,7 @@ def build_app():
             if event.data_table.id == "jobs-table":
                 self.show_jobs_detail(force=False)
             else:
-                self.show_board_detail()
-
-        def on_data_table_row_selected(self, event) -> None:
-            if event.data_table.id == "jobs-table":
-                self.enter_column()
-            else:
-                self.resume_item(self.table_item())
+                self.show_board_detail(force=False)
 
         def restart_job(self, job: dict | None) -> None:
             item = job_resume_item(self.db, job) if job else None
@@ -1796,11 +1966,10 @@ def build_app():
             self.update_chrome()
 
         def enter_header(self) -> None:
+            """Step onto the headers: the Board on the column it is sorted by, Jobs on the first."""
             self.col = None
-            cols = COLUMNS if self.view == "board" else JOB_COLUMNS_UI
-            # the Board opens on the column it is sorted by; Jobs on the first column
             self.header = (
-                next((n for n, (c, _) in enumerate(cols) if c == self.sort[0]), 0) if self.view == "board" else 0
+                next((n for n, (c, _) in enumerate(COLUMNS) if c == self.sort[0]), 0) if self.view == "board" else 0
             )
             self.refresh_view()
 
@@ -1815,11 +1984,11 @@ def build_app():
             self.header = -1
             self.refresh_view()
 
-        # ---- column mode (Jobs): Enter on a row picks a whole column to search
+        # ---- column mode: Enter on a row picks a whole column to search (it starts on ID)
         def enter_column(self) -> None:
-            if self.current_job() is None:
+            if self.cursor_row() is None:
                 return
-            self.col = self.col if self.col is not None else JOB_COLUMNS_UI.index(("title", "Title"))
+            self.col = self.col if self.col is not None else 0
             self.refresh_view()
 
         def leave_column(self) -> None:
@@ -1827,17 +1996,16 @@ def build_app():
             self.refresh_view()
 
         def column_move(self, step: int) -> None:
-            self.col = max(0, min(len(JOB_COLUMNS_UI) - 1, self.col + step))
+            self.col = max(0, min(len(self.cols()) - 1, self.col + step))
             self.refresh_view()
 
         def column_search(self, typed: str = "") -> None:
             """Search the highlighted column. Plain Enter starts from the highlighted row's own value, so
-            Enter, Enter shows every job that shares it (every child of a parent, say)."""
-            job = self.current_job()
-            if self.col is None or job is None:
+            Enter, Enter shows every row that shares it (every child of a parent, say)."""
+            row = self.cursor_row()
+            if self.col is None or row is None:
                 return
-            col = JOB_COLUMNS_UI[self.col][0]
-            row = next(r for r in job_rows(self.db) if r["job"]["id"] == job["id"])
+            col = self.cols()[self.col][0]
             if col in DATE_COLUMNS:
                 if not typed:
                     self.filter_column(self.col, start=date.fromisoformat(row[col]))
@@ -1851,7 +2019,7 @@ def build_app():
         def header_move(self, step: int) -> None:
             if self.header is None:
                 return
-            last = (len(COLUMNS) if self.view == "board" else len(JOB_COLUMNS_UI)) - 1
+            last = len(self.cols()) - 1
             if self.view == "board" and self.header + step < 0:
                 self.action_view("jobs")  # swipe left past the first header onto Jobs
             elif self.view == "jobs" and self.header + step > last:
@@ -1861,26 +2029,29 @@ def build_app():
                 self.refresh_view()
 
         def header_enter(self) -> None:
+            """Enter on a header sorts by it; again flips ascending / descending."""
+            col = self.cols()[self.header][0]
             if self.view == "board":
-                self.sort_by_header()
+                self.sort = (col, not self.sort[1]) if self.sort[0] == col else (col, False)
             else:
-                self.filter_by_header()
+                self.jsort = (col, not self.jsort[1]) if self.jsort[0] == col else (col, False)
+            self.refresh_view()
 
         def header_x(self, n: int) -> int:
             """Where header n starts, so a popup can sit under it."""
-            table = self.query_one("#jobs-table", DataTable)
+            table = self.query_one(self.table_id(), DataTable)
             try:
                 return 2 + sum(c.get_render_width(table) for c in list(table.columns.values())[:n])
             except Exception:  # noqa: BLE001 - placement is cosmetic; fall back to the left edge
                 return 2
 
-        def set_jfilter(self, col: str, value: dict | None) -> None:
+        def set_vfilter(self, col: str, value: dict | None) -> None:
+            filters = self.vfilters()
             if value:
-                self.jfilters[col] = value
+                filters[col] = value
             else:
-                self.jfilters.pop(col, None)
-            self.refresh_jobs()
-            self.update_chrome()
+                filters.pop(col, None)
+            self.refresh_view()
 
         def filter_by_header(self, typed: str = "") -> None:
             self.filter_column(self.header, typed)
@@ -1888,8 +2059,8 @@ def build_app():
         def filter_column(self, n: int, typed: str = "", start: date | None = None) -> None:
             """Open column n's filter: a search list (text, with `typed` already in the box), the kind
             list, or the date picker."""
-            col, label = JOB_COLUMNS_UI[n]
-            saved = self.jfilters.get(col)
+            col, label = self.cols()[n]
+            saved = self.vfilters().get(col)
             x = self.header_x(n)
             if col in DATE_COLUMNS:
                 start = start or (
@@ -1898,38 +2069,26 @@ def build_app():
 
                 def picked(v: dict | None) -> None:
                     if v is not None:
-                        self.set_jfilter(col, None if v.get("clear") else v)
+                        self.set_vfilter(col, None if v.get("clear") else v)
 
                 self.push_screen(DatePick(label, start, x), picked)
                 return
-            others = {k: v for k, v in self.jfilters.items() if k != col}
-            rows = filter_jobs(job_rows(self.db), others)
+            others = {k: v for k, v in self.vfilters().items() if k != col}
+            rows = filter_jobs(self.all_rows(), others)
 
             def picked_text(v: str | None) -> None:
-                self.set_jfilter(col, saved if v is None else ({"text": v} if v else None))
+                self.set_vfilter(col, saved if v is None else ({"text": v} if v else None))
 
             self.push_screen(
                 Suggest(
                     label,
                     lambda q: suggestions(rows, col, q),
                     typed or (saved["text"] if saved and "text" in saved else ""),
-                    lambda value: self.set_jfilter(col, {"text": value} if value else None),
+                    lambda value: self.set_vfilter(col, {"text": value} if value else None),
                     x,
                 ),
                 picked_text,
             )
-
-        def job_filter_chips(self) -> str:
-            labels = dict(JOB_COLUMNS_UI)
-            return " · ".join(
-                f"{labels[c]}: " + (f"“{escape(f['text'])}”" if "text" in f else escape(f["label"]))
-                for c, f in self.jfilters.items()
-            )
-
-        def sort_by_header(self) -> None:
-            col = COLUMNS[self.header][0]
-            self.sort = (col, not self.sort[1]) if self.sort[0] == col else (col, False)
-            self.refresh_view()
 
         def action_start_session(self) -> None:
             if self.view != "jobs":
@@ -2037,6 +2196,7 @@ def build_app():
                                 ext_id=v["ext_id"],
                                 parent=v["parent"] or None,
                                 desc=v["description"],
+                                home=v["home"],
                             )
                         except SystemExit as err:  # core reports bad ids and parents by exiting
                             self.notify(str(err.code), severity="error")
@@ -2044,7 +2204,7 @@ def build_app():
                         save_db(db)
                         self.reload()
 
-                self.push_screen(JobForm("New job", {"kind": DEFAULT_KIND}), job_done)
+                self.push_screen(JobForm("New job", {"kind": DEFAULT_KIND}, self.parent_choices()), job_done)
                 return
 
             def done(v: dict | None) -> None:
@@ -2084,13 +2244,24 @@ def build_app():
                         except SystemExit as err:
                             self.notify(str(err.code), severity="error")
                             return
-                        target.update(name=v["name"], kind=v["kind"], ext_id=v["ext_id"], description=v["description"])
+                        target.update(
+                            name=v["name"],
+                            kind=v["kind"],
+                            ext_id=v["ext_id"],
+                            description=v["description"],
+                            home=home_path(v["home"]),
+                        )
                         save_db(db)
                         self.reload()
 
                 parent = next((j for j in self.db["jobs"] if j["id"] == job["parent_id"]), None)
-                values = {**job, "parent": job_label(parent) if parent else ""}
-                self.push_screen(JobForm(f"Edit {job_label(job)}", values), job_done)
+                values = {**job, "parent": job_label(parent) if parent else "", "home": launch.home(job.get("home"))}
+                self.push_screen(JobForm(f"Edit {job_label(job)}", values, self.parent_choices(job)), job_done)
+
+        def parent_choices(self, job: dict | None = None) -> list[tuple[str, str]]:
+            """(label, name) of every job that could be this one's parent: not itself, not its own children."""
+            barred = {job["id"], *(d["id"] for d in descendants(self.db, job))} if job else set()
+            return [(job_label(j), j["name"]) for j in self.db["jobs"] if j["id"] not in barred]
 
         def action_delete(self) -> None:
             item, job = self.current_item(), self.current_job()
@@ -2150,13 +2321,15 @@ def build_app():
             self.push_screen(FilterForm("Filter the board", current), done)
 
         def action_clear_filters(self) -> None:
+            """Esc steps back one level: off the headers, then the column searches, then column mode, then
+            the Board's own filters."""
             if self.header is not None:
                 self.leave_header()
-            elif self.col is not None and not self.jfilters:
-                self.leave_column()
-            elif self.view == "jobs" and self.jfilters:
-                self.jfilters = {}
+            elif self.vfilters():
+                self.vfilters().clear()
                 self.reload()
+            elif self.col is not None:
+                self.leave_column()
             elif self.view == "board" and self.filters:
                 self.filters = {}
                 self.reload()

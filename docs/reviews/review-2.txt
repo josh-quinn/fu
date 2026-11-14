@@ -1,0 +1,42 @@
+Board
+- Same column mode functionality should apply here and in the summary panel as the jobs
+
+Jobs and Board
+- pressing enter on header should not enter search mode (leave this for column mode ) but instead order by ascend/descend
+- in column mode, the blue row can dissapear so its clearer which row is selected now. Use orange outline header and row highlight. and out of column mode use orange outline higlight on row.
+- in column mode, when press enter default cell should land on ID not title
+
+Session mode:
+- On 'new session', don't show sessions list
+
+New session screen:
+- Agent doesn't get highlighted like other sections, nor does where to start box.
+- skills don't show up
+- ctrl+n ctrl+p pick: use arrow keys instead - ctrl+p jumps to help screen
+- don't need to specify tab inserts/completes, type a path, or up and down to pick - its intuitive
+- change where to start to Start session from, and in repo associated with parent if included exists or child if
+- the path should start from ~/ if within there, not full path
+- look how the search box works here in helix, this is what I want in 'fu'. the path box shouldn't jump around the new session box. doesn't need to stay within boundaries of new session box.
+- items to add in 'Hand it'
+	- when item highlighed, box shows whats there
+	- for artifacts and child jobs, box shows items, user can selct which ones - maybe don't want all
+	- this box is the same as the helix type box in video
+	- what are earlier sessions?
+
+- how do these iteams "Get handed" to the session, and how is the prompt structured with everything? There needs to be a well defined way for this to get most of AI so it actaully knows what to do with everything. This is the most important part so think through this a lot, beyond my guidance. This feature should be useful rather then a waste.
+- ctrl+enter to start new session
+
+
+- bad feature, when a session is started, seems like it exist out of the TUI, so when you press escp in the session your TUI is gone.. change this.
+
+when adding or editing jobs:
+- parent job should show up drowdown with list of IDs with name, and as type list searchs (just like helix video)
+- option to add home folder to job
+
+Artifacts
+- x hides a wrong guess removes the artifact, but it should be able to ctrl+z easily, and even without undoing, a record of those should be kept with option to return them in case. also option to add artifacts.
+- if no artifacts, still should have option to press enter and add manually
+
+Sessions
+when press enter on session, pop up should have two buttons  Resume and Session folder. folder opens the sessino directory
+

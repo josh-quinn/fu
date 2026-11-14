@@ -254,3 +254,22 @@ def test_job_add_and_edit_set_the_home_folder(monkeypatch, capsys, tmp_path):
     assert core.load_db()["jobs"][0]["home"] == str(tmp_path.resolve())
     run(monkeypatch, capsys, "job", "edit", "Homed", "--home", "")
     assert core.load_db()["jobs"][0]["home"] == ""
+
+
+def test_a_follow_up_parked_mid_session_lands_on_that_sessions_job(monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    run(monkeypatch, capsys, "add", "design the loss", "--job", "Backprop")
+    out = run(monkeypatch, capsys, "add", "idea: cache activations")
+    assert "the job this session is on" in out and "--no-job" in out
+    out = run(monkeypatch, capsys, "add", "idea: unrelated tool", "--no-job")
+    items = core.load_db()["items"]
+    assert [i["job_id"] for i in items] == [1, 1, None]
+
+
+def test_outside_a_known_session_the_folder_picks_the_job_by_its_home(monkeypatch, capsys, tmp_path):
+    (tmp_path / "repo" / "src").mkdir(parents=True)
+    run(monkeypatch, capsys, "job", "add", "Backprop", "--home", str(tmp_path / "repo"))
+    run(monkeypatch, capsys, "add", "idea", "--cwd", str(tmp_path / "repo" / "src"))
+    run(monkeypatch, capsys, "add", "elsewhere", "--cwd", str(tmp_path))
+    assert [i["job_id"] for i in core.load_db()["items"]] == [1, None]

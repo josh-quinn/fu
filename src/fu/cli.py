@@ -37,6 +37,7 @@ from fu.core import (
     remove_job,
     resume_cmd,
     save_db,
+    session_job,
     session_label,
     set_parent,
     skey,
@@ -72,16 +73,19 @@ def cmd_add(a) -> None:
     db = load_db()
     cwd = str(Path(a.cwd).expanduser().resolve()) if a.cwd else os.getcwd()
     agent = a.agent or detect_agent()
+    session_id = a.session_id or detect_session(agent, cwd)
+    # Parked mid-session, a follow-up belongs to the job that session is on unless it's unrelated.
+    guessed = None if (a.job or a.no_job) else session_job(db, agent, session_id, cwd)
     item = new_item(
         db,
         " ".join(a.summary),
         why=a.why or "",
         status=a.status,
         agent=agent,
-        session_id=a.session_id or detect_session(agent, cwd),
+        session_id=session_id,
         cwd=cwd,
         notes=a.note or "",
-        job=a.job,
+        job=a.job or (str(guessed["id"]) if guessed else None),
         kind=a.kind,
     )
     apply_artifact_flags(item, a)
@@ -92,6 +96,8 @@ def cmd_add(a) -> None:
         return
     job = job_name(db, item)
     print(f"added #{item['id']}: {item['summary']}" + (f"  [job: {job}]" if job else ""))
+    if guessed:
+        print(f"filed under {job_label(guessed)} {guessed['name']}, the job this session is on (--no-job if unrelated)")
     print(f"restart: {resume_cmd(item) or '(no session id captured; pass --agent and --session-id)'}")
 
 
@@ -411,7 +417,10 @@ def main() -> None:
     sp = parser("add", cmd_add, "park a task")
     sp.add_argument("summary", nargs="+", help="one-line topic")
     sp.add_argument("--why", help="why you started it / where you left off")
-    sp.add_argument("--job", help="job name or id to file it under (a new name creates the job)")
+    sp.add_argument(
+        "--job", help="job name or id to file it under (a new name creates the job); default: this session's job"
+    )
+    sp.add_argument("--no-job", action="store_true", help="it's unrelated to the job this session is on")
     sp.add_argument("--kind", help="type for a newly created job (default story)")
     sp.add_argument(
         "--artifact",
@@ -484,7 +493,7 @@ def main() -> None:
     sp = parser("add", cmd_job_add, "create a job", parent=jsub)
     sp.add_argument("name", nargs="+")
     sp.add_argument("--kind", default=DEFAULT_KIND, help="epic, story, bug, spike, task, or your own")
-    sp.add_argument("--id", help="your own id for it, e.g. a Jira key (optional; ideas and btws rarely have one)")
+    sp.add_argument("--id", help="your own id for it, usually the Jira key (optional)")
     sp.add_argument("--parent", help="job this one belongs to, e.g. the epic of a story")
     sp.add_argument("--desc")
     sp.add_argument("--home", help="the job's home folder (new sessions start there)")

@@ -240,6 +240,24 @@ def ensure_job(db: dict, ref: str, kind: str | None = None) -> dict:
     return job_by_ref(db, ref, fuzzy=False) or create_job(db, ref, kind)
 
 
+def session_job(db: dict, agent: str | None, session_id: str | None, cwd: str | None) -> dict | None:
+    """The job a session is working on, so a follow-up parked in it lands there: the job of the
+    session's latest task (a session started from fu has one from the start), else the job whose
+    home folder holds cwd (the deepest one)."""
+    if agent and session_id:
+        mine = [i for i in db["items"] if i.get("agent") == agent and i.get("session_id") == session_id]
+        latest = max((i for i in mine if i.get("job_id")), key=lambda i: (i["last_worked"], i["id"]), default=None)
+        if latest:
+            return next((j for j in db["jobs"] if j["id"] == latest["job_id"]), None)
+    if cwd:
+        here = Path(cwd).resolve()
+        homes = [
+            j for j in db["jobs"] if j.get("home") and (here == Path(j["home"]) or Path(j["home"]) in here.parents)
+        ]
+        return max(homes, key=lambda j: len(j["home"]), default=None)
+    return None
+
+
 def job_name(db: dict, item: dict) -> str:
     job = next((j for j in db["jobs"] if j["id"] == item.get("job_id")), None)
     return job["name"] if job else ""

@@ -74,18 +74,19 @@ COLUMNS = [
 
 HELP = """\
 [b]Screens[/]
-  [b]2[/]  Board   every follow-up in one list (the default screen)
+  [b]2[/]  Follow-ups  every parked idea and piece of work in one list (the default screen)
   [b]1[/]  Jobs    your jobs as a table: ID, Type, Parent, Title, Added, Last worked
-  [b]↑[/]  from the first row, step onto the column headers; [b]↑[/] again reaches the Jobs / Board tabs,
+  [b]↑[/]  from the first row, step onto the column headers; [b]↑[/] again reaches the Jobs / Follow-ups tabs,
      where [b]← →[/] switch screen and [b]↓[/] comes back to the headers
-  [b]←[/]  on the Board's first header: swipe over to Jobs;  [b]→[/] on the Jobs table's last header: to the Board
+  [b]←[/]  on Follow-ups' first header: swipe over to Jobs;  [b]→[/] on the Jobs table's last header: back
+  [b]ctrl+o[/]  back to where you jumped from (after enter on a job, a parent, or "Go to it")
   [b]shift+.[/] (>)  show or hide the panel beside the table
 
 [b]Headers (both screens)[/]
   [b]← →[/]    move between headers          [b]↓[/] or [b]esc[/]  back to the rows
   [b]enter[/]  sort by that header; again to flip ascending / descending
   typing   search that column (not on the date columns; use column mode for those)
-  Board ties fall back to: job > status > last worked > added;  status > last worked > added.
+  Follow-ups ties fall back to: job > status > last worked > added;  status > last worked > added.
 
 [b]Column mode (both screens)[/]
   [b]enter[/]  on a row: column mode, starting on ID. The row and the picked header turn orange.
@@ -101,13 +102,13 @@ HELP = """\
   changes Ctrl to "alt" or "super"). [b]F1[/] opens help; [b]R[/] and [b]>[/] stay plain.
 
 [b]Sessions[/]
-  [b]shift+r[/] (R)  Board: resume the task's session.  Jobs: choose [b]Restart[/] or [b]New Session[/] ([b]← →[/]),
+  [b]shift+r[/] (R)  Follow-ups: resume the session it came from.  Jobs: choose [b]Restart[/] or [b]New Session[/] ([b]← →[/]),
           and on Restart [b]↑ ↓[/] the session. A job without sessions goes straight to New Session.
   The session runs right here: the board steps aside and comes back when you leave the agent.
   [b]New Session[/]
     Agent              claude or copilot
     Hand over          what the agent gets in its brief: why, notes, open follow-ups, parent,
-                       child jobs, earlier sessions, artifacts. The box beside each shows what it
+                       child jobs, earlier sessions, outputs. The box beside each shows what it
                        holds; [b]→[/] goes into a list to pick entries ([b]space[/] ticks), [b]←[/] comes back.
                        Earlier sessions are what each one worked on, plus its transcript path for
                        the agent to read only if it needs to.
@@ -117,33 +118,35 @@ HELP = """\
     [b]ctrl+enter[/] (or ctrl+j / ctrl+s) starts it;  [b]esc[/] cancels.
   Suggestion boxes float under the cursor: [b]↑ ↓[/] pick, [b]enter[/] or [b]tab[/] take, [b]esc[/] hides.
 
-[b]Working on a task (Board)[/]
-  [b]a[/]  add a task (on Jobs: add a job)
-  [b]e[/]  edit the task or job (a job's parent is picked from a searchable list; it can have a home folder)
+[b]Working on a follow-up[/]
+  [b]shift+p[/] (P)  promote it to a job of its own, under the job it came from
+  [b]a[/]  add a follow-up (on Jobs: add a job)
+  [b]e[/]  edit the follow-up or job (a job has a Jira ID, type, parent, project, home folder)
   [b]s[/]  cycle status: todo > doing > done
   [b]d[/]  mark done (kept until you delete it)
   [b]t[/]  set last worked to today
   [b]y[/]  copy the restart command
-  [b]x[/]  delete the task (or job: its tasks are kept, unassigned; child jobs move up)
+  [b]x[/]  delete the follow-up (or job: its follow-ups are kept, unassigned; child jobs move up)
   [b]f[/] or [b]/[/]  filter by text, job, status, agent, session, idle days, recently worked
   [b]c[/]  clear every filter
-  [b].[/]  show or hide done tasks
+  [b].[/]  show or hide done follow-ups
 
 [b]The panel[/]
   [b]→[/]      on a row, step into the panel;  [b]←[/] or [b]esc[/] goes back to the rows
   [b]↑ ↓[/]    move between its entries. Long ones are cut to one line; rest on one for a second to see it all.
   [b]enter[/]  on a job or the parent: jump to that job on the Jobs screen
-          on a session: [b]Resume[/] it, or open its [b]Session folder[/]
-          on Artifacts: what the sessions left (runbooks, explainers, skills, repos). [b]enter[/] opens one,
-                        [b]x[/] hides a wrong guess (it moves to Hidden, where [b]x[/] brings it back),
-                        [b]ctrl+z[/] undoes, [b]a[/] adds a file or folder by hand
-          on Notes: add or edit a note ([b]ctrl+s[/] saves)
+          on a session: [b]Resume[/] it, open its [b]Work folder[/] (or the [b]Job folder[/]), or its
+                        [b]Session files[/] (Copilot's session folder, Claude's transcript)
+          on Why or Notes: edit it ([b]ctrl+s[/] saves; [b]esc[/] keeps a draft until fu closes)
+          on a follow-up (Jobs): [b]Go to it[/], [b]Resume[/] its session, or [b]Promote to job[/]
+          on Outputs: the documents, skills and repos made for the job. [b]enter[/] opens one,
+                      [b]a[/] adds a file or folder by hand, [b]x[/] removes one (after asking)
   Drag the panel's left edge with the mouse to resize it.
 
 [b]Good to know[/]
-  [b]Done tasks are never auto-deleted.[/] [b].[/] only hides them; they stay in board.json until you press x.
+  [b]Done follow-ups are never auto-deleted.[/] [b].[/] only hides them; they stay in board.json until you press x.
   Last worked is [green]green[/] under 3 days, [yellow]yellow[/] under 7, [red]red[/] after that.
-  A task belongs to one job and one session. Jobs and sessions are many-to-many through their tasks.
+  A follow-up belongs to at most one job and one session; a job gathers its follow-ups, sessions and outputs.
   [b]h[/], [b]?[/] or [b]F1[/]  this help      [b]q[/]  quit
 
 [dim]esc, h or q to close[/]"""

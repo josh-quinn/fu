@@ -113,9 +113,13 @@ def save_db(db: dict) -> None:
     d.mkdir(parents=True, exist_ok=True)
     # Atomic write: the agent and the TUI may both touch the board.
     fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        json.dump(db, f, indent=2)
-    os.replace(tmp, d / "board.json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(db, f, indent=2)
+        os.replace(tmp, d / "board.json")
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     (d / "BOARD.md").write_text(render_markdown(db))
 
 

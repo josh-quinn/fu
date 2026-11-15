@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- `--session-id` only accepts letters, digits, `.`, `_` and `-`, and a stored id is never used
+  as a glob or a path when it doesn't match, so an id can't reach another session's files.
+
+### Fixed
+- A save that fails part way no longer leaves a stray `.tmp` file in the data folder.
+
 ## [0.1.0] - 2026-11-15
 
 ### Added

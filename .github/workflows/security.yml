@@ -54,6 +54,12 @@ jobs:
           for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
             git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg"
             .githooks/commit-msg "$RUNNER_TEMP/msg" || { echo "::error::commit $c"; status=1; }
+            # Developer Certificate of Origin: the author signs off (git commit -s). Bots such
+            # as Dependabot sign off under a different address, so they are skipped.
+            author=$(git log -1 --format='%an <%ae>' "$c")
+            case "$author" in *'[bot]@users.noreply.github.com>') continue ;; esac
+            git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$c" | grep -qxF "$author" \
+              || { echo "::error::commit $c has no 'Signed-off-by: $author' (git commit -s)"; status=1; }
           done
           exit "$status"
 

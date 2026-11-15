@@ -273,3 +273,20 @@ def test_outside_a_known_session_the_folder_picks_the_job_by_its_home(monkeypatc
     run(monkeypatch, capsys, "add", "idea", "--cwd", str(tmp_path / "repo" / "src"))
     run(monkeypatch, capsys, "add", "elsewhere", "--cwd", str(tmp_path))
     assert [i["job_id"] for i in core.load_db()["items"]] == [1, None]
+
+
+def test_install_skill_flag_links_the_skill_for_both_agents(monkeypatch, capsys, isolated):
+    out = run(monkeypatch, capsys, "--install-skill")
+    for agent in (".claude", ".copilot"):
+        link = isolated / "home" / agent / "skills" / "follow-ups"
+        assert link.is_symlink() and (link / "SKILL.md").exists()
+    assert "claude:" in out and "copilot:" in out
+
+
+def test_a_homebrew_install_links_the_skill_through_opt_so_upgrades_keep_it(tmp_path):
+    cellar = tmp_path / "Cellar" / "fu" / "0.1.0" / "libexec" / "skills"
+    opt = tmp_path / "opt" / "fu" / "libexec" / "skills"
+    cellar.mkdir(parents=True)
+    opt.mkdir(parents=True)
+    assert cli.stable_path(cellar) == opt
+    assert cli.stable_path(tmp_path / "elsewhere") == tmp_path / "elsewhere"

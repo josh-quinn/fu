@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -233,12 +234,21 @@ def cmd_resume(a) -> None:
     os.execvp("/bin/sh", ["sh", "-c", launch.prepare_resume(a.id)])
 
 
+def stable_path(path: Path) -> Path:
+    """Homebrew installs into a versioned Cellar folder that `brew upgrade` deletes; its opt/ link
+    always points at the current version, so link the skill through that instead."""
+    m = re.match(r"^(.*)/Cellar/fu/[^/]+/(.*)$", str(path))
+    if m and (opt := Path(f"{m.group(1)}/opt/fu/{m.group(2)}")).exists():
+        return opt
+    return path
+
+
 def cmd_skill(a) -> None:
     """Link (or copy) the packaged skill into the agents' skill folders."""
     import shutil
     from importlib.resources import files
 
-    source = Path(str(files("fu") / "skills" / "follow-ups"))
+    source = stable_path(Path(str(files("fu") / "skills" / "follow-ups")))
     targets = {"claude": Path("~/.claude/skills").expanduser(), "copilot": Path("~/.copilot/skills").expanduser()}
     if a.action == "path":
         print(source)
@@ -407,6 +417,11 @@ def main() -> None:
         prog="fu", description="Follow-up board for parked work. Run with no arguments for the TUI."
     )
     p.add_argument("--version", action="version", version=f"fu {version('fu-board')}")
+    p.add_argument(
+        "--install-skill",
+        action="store_true",
+        help="give Claude Code and Copilot CLI the follow-ups skill (same as `fu skill install`)",
+    )
     sub = p.add_subparsers(dest="cmd")
 
     def parser(name, fn, help, aliases=(), parent=None):
@@ -529,7 +544,9 @@ def main() -> None:
     sub.add_parser("tui", help="open the board (default)").set_defaults(fn=None)
 
     a = p.parse_args()
-    if getattr(a, "fn", None):
+    if a.install_skill:
+        cmd_skill(argparse.Namespace(action="install", target="all", copy=False))
+    elif getattr(a, "fn", None):
         a.fn(a)
     elif sys.stdout.isatty():
         from fu.tui import run_tui  # lazy: plain CLI calls should not import Textual

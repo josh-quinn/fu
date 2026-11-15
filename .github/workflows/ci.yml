@@ -50,3 +50,7 @@ jobs:
           enable-cache: false
       - run: uv build
       - run: sh scripts/verify-dist.sh
+      - name: Rebuild and compare bit for bit (reproducible build)
+        run: |
+          uv build --out-dir "$RUNNER_TEMP/again"
+          for f in dist/*.tar.gz dist/*.whl; do cmp "$f" "$RUNNER_TEMP/again/$(basename "$f")"; done

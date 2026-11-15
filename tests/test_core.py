@@ -380,3 +380,27 @@ def test_jobs_sort_by_any_column_both_ways():
     rows = core.job_rows(db)
     assert [r["title"] for r in core.sort_jobs(rows, "title", False)] == ["Alpha", "beta", "gamma"]
     assert [r["title"] for r in core.sort_jobs(rows, "title", True)] == ["gamma", "beta", "Alpha"]
+
+
+def test_a_failed_save_leaves_the_old_board_whole_and_no_temp_file(monkeypatch):
+    core.save_db({"items": [], "jobs": [], "marker": "keep me"})
+    before = (core.data_dir() / "board.json").read_text()
+
+    def explode(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(core.json, "dump", explode)
+    with pytest.raises(OSError):
+        core.save_db({"items": [], "jobs": []})
+    assert (core.data_dir() / "board.json").read_text() == before
+    assert not list(core.data_dir().glob("*.tmp"))
+
+
+@pytest.mark.parametrize("hostile", ["/w'; touch pwned; '", "/w && rm -rf ~", "/w $(id) `id`", "/w\nid"])
+def test_a_hostile_folder_or_session_stays_one_argument(hostile):
+    import shlex
+
+    cmd = core.resume_cmd({"agent": "claude", "session_id": "s1", "cwd": hostile})
+    assert shlex.split(cmd) == ["cd", hostile, "&&", "claude", "--resume", "s1"]
+    cmd = core.resume_cmd({"agent": "copilot", "session_id": hostile, "cwd": "/w"})
+    assert shlex.split(cmd) == ["cd", "/w", "&&", "copilot", f"--resume={hostile}"]

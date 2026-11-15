@@ -1,5 +1,10 @@
 # fu
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16725/badge)](https://www.bestpractices.dev/projects/16725)
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/16725/baseline)](https://www.bestpractices.dev/projects/16725)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/josh-quinn/fu/badge)](https://scorecard.dev/viewer/?uri=github.com/josh-quinn/fu)
+[![CI](https://github.com/josh-quinn/fu/actions/workflows/ci.yml/badge.svg)](https://github.com/josh-quinn/fu/actions/workflows/ci.yml)
+
 A follow-up board for the ideas and loose ends that come up while you work with Claude Code or
 Copilot CLI. Mid-session you have an idea, or have to switch away from something half-done: `fu`
 parks it in seconds, files it under the job you're on, and remembers the session it came from so
@@ -17,6 +22,17 @@ you can reopen it exactly where you were.
 
 Why it is built this way: [docs/adr/0007](docs/adr/0007-model-work-as-follow-ups-jobs-and-outputs.md).
 
+## Quick start
+
+```sh
+brew install josh-quinn/tap/fu && fu --install-skill
+fu add "Try fu" --why "seeing how parking works"   # park something
+fu ls                                              # see it
+fu                                                 # the board; press h for help
+```
+
+In a Claude Code or Copilot session, say "park this" and the agent does the `fu add` for you.
+
 ## Install
 
 ```sh
@@ -27,6 +43,11 @@ fu --install-skill      # give Claude Code and Copilot CLI the follow-ups skill
 `fu --install-skill` (or `fu skill install`) links the skill into `~/.claude/skills` and
 `~/.copilot/skills`. Homebrew can't do this step itself: it only writes inside its own prefix.
 Run it once; the link follows `brew upgrade`.
+
+Upgrade with `brew upgrade fu`; boards and config from older versions are carried forward
+(an old `config.toml` is converted once, and you are told). Uninstall with
+`rm ~/.claude/skills/follow-ups ~/.copilot/skills/follow-ups && brew uninstall fu`; your board
+and config stay where they are.
 
 ## Use
 
@@ -84,6 +105,13 @@ gh attestation verify fu_board-X.Y.Z.tar.gz --repo josh-quinn/fu \
 slsa-verifier verify-artifact fu_board-X.Y.Z.tar.gz \
   --provenance-path multiple.intoto.jsonl \
   --source-uri github.com/josh-quinn/fu --source-tag vX.Y.Z
+```
+
+Releases are reproducible: building the tag gives the same bytes as the release.
+
+```sh
+git clone https://github.com/josh-quinn/fu && cd fu && git checkout vX.Y.Z
+uv build && shasum -a 256 dist/*    # compare with SHA256SUMS from the release
 ```
 
 ## Develop

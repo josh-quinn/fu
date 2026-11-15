@@ -36,6 +36,8 @@ def claude_root() -> Path:
 
 
 def claude_transcript(session_id: str) -> Path | None:
+    if not core.valid_session_id(session_id):
+        return None
     return next(iter(claude_root().glob(f"*/{session_id}.jsonl")), None)
 
 
@@ -85,7 +87,7 @@ def written_paths(agent: str | None, session_id: str | None) -> list[str]:
         src = claude_transcript(session_id)
         reader = _written_by_claude
     else:
-        src = core.COPILOT_SESSIONS / session_id
+        src = core.COPILOT_SESSIONS / session_id if core.valid_session_id(session_id) else None
         reader = _written_by_copilot
     if not src or not src.exists():
         return []
@@ -106,7 +108,7 @@ def session_title(agent: str | None, session_id: str | None) -> str:
                 except ValueError:
                     continue
         return title
-    if agent == "copilot" and session_id:
+    if agent == "copilot" and core.valid_session_id(session_id):
         ws = core.COPILOT_SESSIONS / session_id / "workspace.yaml"
         m = re.search(r"^name: (.+)$", ws.read_text(errors="replace"), re.MULTILINE) if ws.exists() else None
         return m.group(1).strip().strip("'\"") if m else ""
@@ -237,7 +239,7 @@ def remove(item: dict, path: str) -> None:
 
 def session_files(agent: str | None, session_id: str | None) -> Path | None:
     """Where the agent keeps this session: Copilot's session folder, or Claude's transcript file."""
-    if agent == "copilot" and session_id:
+    if agent == "copilot" and core.valid_session_id(session_id):
         folder = core.COPILOT_SESSIONS / session_id
         return folder if folder.is_dir() else None
     if agent == "claude" and session_id:

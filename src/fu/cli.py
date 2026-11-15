@@ -45,9 +45,17 @@ from fu.core import (
     sort_items,
     today,
     update,
+    valid_session_id,
 )
 
 # --------------------------------------------------------------- commands
+
+
+def session_id_arg(value: str) -> str:
+    """argparse type for --session-id: an agent's id, or '' to clear it."""
+    if value and not valid_session_id(value):
+        raise argparse.ArgumentTypeError(f"not a session id: {value!r} (letters, digits, '.', '_' and '-' only)")
+    return value
 
 
 def apply_artifact_flags(item: dict, a) -> None:
@@ -445,7 +453,7 @@ def main() -> None:
     )
     sp.add_argument("--label", help="name for the one --artifact given")
     sp.add_argument("--agent", choices=AGENTS, help="default: detected from the environment")
-    sp.add_argument("--session-id", help="default: detected for the chosen agent")
+    sp.add_argument("--session-id", type=session_id_arg, help="default: detected for the chosen agent")
     sp.add_argument("--cwd", help="default: current folder")
     sp.add_argument("--status", choices=STATUSES, default="todo")
     sp.add_argument("--note")
@@ -474,7 +482,7 @@ def main() -> None:
     sp.add_argument("--job", help="job name/id to file it under, or 'none'")
     sp.add_argument("--kind", help="type if --job creates a new job")
     sp.add_argument("--agent", choices=AGENTS)
-    sp.add_argument("--session-id")
+    sp.add_argument("--session-id", type=session_id_arg)
     sp.add_argument("--cwd")
     sp.add_argument("--note")
     sp.add_argument(

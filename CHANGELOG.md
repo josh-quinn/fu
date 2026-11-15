@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-15
+
 ### Security
 - `--session-id` only accepts letters, digits, `.`, `_` and `-`, and a stored id is never used
   as a glob or a path when it doesn't match, so an id can't reach another session's files.
@@ -19,6 +21,9 @@ All notable changes to this project are documented here. The format follows
 - `--help` and the skill use "follow-up" consistently; the skill names `fu --install-skill`,
   `fu sessions` and `job add --desc`.
 - A save that fails part way no longer leaves a stray `.tmp` file in the data folder.
+
+### Changed
+- Releases are checked to build bit for bit the same in CI; commits need a DCO sign-off.
 
 ## [0.1.0] - 2026-11-15
 
@@ -37,5 +42,6 @@ All notable changes to this project are documented here. The format follows
 - `fu --install-skill` (or `fu skill install`) links the bundled follow-ups skill into Claude
   Code and Copilot CLI.
 
-[Unreleased]: https://github.com/josh-quinn/fu/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/josh-quinn/fu/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/josh-quinn/fu/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/josh-quinn/fu/releases/tag/v0.1.0

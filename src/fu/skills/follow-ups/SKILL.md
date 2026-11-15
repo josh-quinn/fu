@@ -26,13 +26,13 @@ Three things live on the board:
    ```bash
    fu add "<summary>" --why "<why + where it stands>" [--no-job | --job ML-12]
    ```
-   `fu` detects the agent, folder and session. In Copilot CLI add `--agent copilot`. Use `--status doing` if the user is actively mid-way rather than noting something for later.
-5. **Confirm in one line**: the id, the job it went under, and the restart command. If it printed "no session id captured", say so and show the fix (`fu edit <id> --agent ... --session-id ...`); don't invent an id.
+   `fu` detects the agent and session, and records the folder the session started in (that is where it has to be resumed from), so it works from any folder. In Copilot CLI add `--agent copilot` and run it from the folder the session started in: that is how `fu` finds a Copilot session. Use `--status doing` if the user is actively mid-way rather than noting something for later.
+5. **Confirm in one line**: the id, the job it went under (or that it's unfiled, when `fu` names no job), and the restart command. If it printed "no session id captured", say so and show the fix (`fu edit <id> --agent ... --session-id ...`, where the id is the agent's own: letters, digits, `.`, `_` and `-`); don't invent an id.
 6. **Carry on with what the user was doing.** Parking is a side-trip.
 
 To attach a document to a follow-up yourself (rarely needed): `fu add ... --artifact PATH --label "Prod runbook"`.
 
-If `fu` isn't found, tell the user to install it with `brew install josh-quinn/tap/fu` (then `fu skill install` links this skill into Claude Code and Copilot CLI), and retry.
+If `fu` isn't found, tell the user to install it with `brew install josh-quinn/tap/fu` (then `fu --install-skill` links this skill into Claude Code and Copilot CLI), and retry.
 
 ## If this session was started from fu
 
@@ -41,14 +41,14 @@ The system prompt (Claude) or first message (Copilot) has a handoff brief: the j
 ## Reviewing and resuming
 
 - `fu ls` lists open follow-ups, least recently touched first. Filters combine: `--job NAME|none`, `--session ID-FRAGMENT`, `--agent`, `--status`, `--search TEXT`, `--idle N`, `--recent N`; `--json` is for you to parse.
-- `fu job ls` lists jobs with their open and done counts; `fu tree` shows jobs > sessions > follow-ups.
+- `fu job ls` lists jobs with their open and done counts; `fu tree` shows jobs > sessions > follow-ups; `fu sessions` lists the agent sessions that parked something.
 - `fu show <id>` shows the full entry; `fu resume <id> --print` gives the restart command to hand the user. Don't run `fu resume` yourself from inside a session: it replaces the current process.
 - When the user picks a follow-up back up, `fu touch <id>`; when it's finished, `fu done <id>`. Done follow-ups are kept (hidden from `fu ls`, shown with `--all`) until the user removes them with `fu rm`.
 - The TUI: run `fu` in a terminal. `1` Jobs, `2` Follow-ups, `shift+R` resumes a follow-up's session or starts a new session for a job with a brief, `shift+P` promotes a follow-up to its own job, `h` for help.
 
 ## Other commands
 
-`fu edit <id> [--summary --why --status --job NAME|none --agent --session-id --cwd --note]`, `fu reopen <id>`, `fu rm <id> -y`, `fu job add NAME [--id JIRA-KEY --kind story --parent KEY --home DIR --project KEY]`, `fu job edit`, `fu job rm`, `fu path`. Statuses are `todo`, `doing`, `done`. Job types are epic, story, bug, spike and task, plus any the user adds. Deleting a job keeps its follow-ups and just unassigns them.
+`fu edit <id> [--summary --why --status --job NAME|none --agent --session-id --cwd --note]`, `fu reopen <id>`, `fu rm <id> -y`, `fu job add NAME [--id JIRA-KEY --kind story --desc TEXT --parent KEY --home DIR --project KEY]`, `fu job edit`, `fu job rm`, `fu path`. Statuses are `todo`, `doing`, `done`. Job types are epic, story, bug, spike and task, plus any the user adds. Deleting a job keeps its follow-ups and just unassigns them.
 
 ## Where things live
 

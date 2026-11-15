@@ -307,3 +307,19 @@ def test_real_session_ids_are_accepted(monkeypatch, capsys):
         monkeypatch, capsys, "add", "idea", "--agent", "claude", "--session-id", "eb77028c-f64a-44d9-8b7d-1ff00935014c"
     )
     assert "claude --resume eb77028c-f64a-44d9-8b7d-1ff00935014c" in out
+
+
+def test_the_restart_folder_is_where_the_session_started_not_the_shells(monkeypatch, capsys, tmp_path):
+    # Claude Code finds a session by the folder it began in; an agent's shell often wanders off.
+    import json as _json
+
+    f = tmp_path / "home" / ".claude" / "projects" / "-proj" / "sess-7.jsonl"
+    f.parent.mkdir(parents=True)
+    f.write_text(_json.dumps({"type": "user", "cwd": "/proj", "sessionId": "sess-7"}) + "\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-7")
+    assert "restart: cd /proj && claude --resume sess-7" in run(monkeypatch, capsys, "add", "idea")
+    assert "cd /w && claude" in run(monkeypatch, capsys, "add", "other", "--cwd", "/w")  # --cwd still wins

@@ -35,6 +35,30 @@ def claude_root() -> Path:
     return Path("~/.claude/projects").expanduser()
 
 
+def session_cwd(agent: str | None, session_id: str | None) -> str | None:
+    """The folder a Claude session started in: where `claude --resume` looks for it."""
+    if agent != "claude" or not (src := claude_transcript(session_id)):
+        return None
+    with src.open(errors="replace") as f:
+        for line in f:
+            if '"cwd"' in line:
+                try:
+                    if cwd := json.loads(line).get("cwd"):
+                        return cwd
+                except ValueError:
+                    continue
+    return None
+
+
+def agent_housekeeping(p: Path) -> bool:
+    """Files an agent keeps for itself (memory, rules, transcripts, settings) are never outputs; skills are."""
+    for name in (".claude", ".copilot"):
+        root = Path.home() / name
+        if p == root or root in p.parents:
+            return not skill_dir(p)
+    return False
+
+
 def claude_transcript(session_id: str) -> Path | None:
     if not core.valid_session_id(session_id):
         return None
@@ -166,6 +190,7 @@ def classify(paths: list[str]) -> list[dict]:
             or CACHE_PARTS & set(p.parts)
             or p.name in LOCKFILES
             or not p.exists()
+            or agent_housekeeping(p)
         ):
             continue
         if skill := skill_dir(p):

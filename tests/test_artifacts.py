@@ -203,3 +203,15 @@ def test_documents_in_a_gitignored_folder_of_a_repo_are_listed_one_by_one(isolat
     code.write_text("x")
     out = {(a["kind"], a["path"]) for a in artifacts.classify([str(runbook), str(code)])}
     assert out == {("doc", str(runbook)), ("repo", str(repo))}
+
+
+def test_agent_housekeeping_is_not_an_output(isolated):
+    home = isolated / "home"
+    paths = [
+        touch(home / ".claude" / "projects" / "p" / "memory" / "note.md"),
+        touch(home / ".claude" / "rules" / "style.md"),
+        touch(home / ".claude" / "CLAUDE.md"),
+        touch(home / ".copilot" / "session-state" / "s" / "plan.md"),
+        touch(home / "notes" / "runbook.md"),
+    ]
+    assert [a["path"] for a in artifacts.classify(paths)] == [str(home / "notes" / "runbook.md")]

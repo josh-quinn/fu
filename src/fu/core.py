@@ -22,8 +22,15 @@ DEFAULT_KIND = "story"
 # those kinds become plain tasks.
 LEGACY_KINDS = {"idea": "task", "btw": "task", "guide": "task", "misc": "task"}
 JIRA_KEY = re.compile(r"^([A-Z][A-Z0-9]+)-\d+$")
+# Agent session ids are UUID-like. Anything else is refused, because an id ends up in file
+# names, glob patterns and the restart command.
+SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 COPILOT_SESSIONS = Path("~/.copilot/session-state").expanduser()
 UNSET = object()
+
+
+def valid_session_id(session_id: str | None) -> bool:
+    return bool(session_id) and bool(SESSION_ID.match(session_id)) and ".." not in session_id
 
 
 # ---------------------------------------------------------------- storage

@@ -57,6 +57,13 @@ class TestReadingClaude:
         assert artifacts.session_title("claude", "s1") == "Follow-up task board skill"
         assert artifacts.session_title("claude", "missing") == ""
 
+    def test_a_session_id_is_never_a_glob_or_a_path(self, home):
+        claude_session(home, "s1", ("Write", {"file_path": "/a/runbook.md"}), title="Someone else's session")
+        for bad in ("*", "s?", "../proj/s1", "/abs"):
+            assert artifacts.session_title("claude", bad) == ""
+            assert artifacts.written_paths("claude", bad) == []
+            assert artifacts.session_title("copilot", bad) == ""
+
 
 class TestReadingCopilot:
     def make(self, isolated, sid="c1", events=(), name=None):

@@ -290,3 +290,20 @@ def test_a_homebrew_install_links_the_skill_through_opt_so_upgrades_keep_it(tmp_
     opt.mkdir(parents=True)
     assert cli.stable_path(cellar) == opt
     assert cli.stable_path(tmp_path / "elsewhere") == tmp_path / "elsewhere"
+
+
+@pytest.mark.parametrize("bad", ["../../etc", "a b", "$(id)", "x;rm", "*"])
+def test_a_session_id_outside_the_allowlist_is_rejected(monkeypatch, capsys, bad):
+    with pytest.raises(SystemExit) as exit_:
+        run(monkeypatch, capsys, "add", "idea", "--agent", "copilot", "--session-id", bad)
+    assert exit_.value.code == 2 and "session id" in capsys.readouterr().err
+    run(monkeypatch, capsys, "add", "idea")
+    with pytest.raises(SystemExit):
+        run(monkeypatch, capsys, "edit", "1", "--session-id", bad)
+
+
+def test_real_session_ids_are_accepted(monkeypatch, capsys):
+    out = run(
+        monkeypatch, capsys, "add", "idea", "--agent", "claude", "--session-id", "eb77028c-f64a-44d9-8b7d-1ff00935014c"
+    )
+    assert "claude --resume eb77028c-f64a-44d9-8b7d-1ff00935014c" in out

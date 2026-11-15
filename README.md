@@ -1,60 +1,70 @@
 # fu
 
-A follow-up board for parked work. When you switch from task A to task B, `fu` keeps task A
-from being forgotten: it records what it was, why you started it, when you last touched it,
-and the exact command that reopens the Claude Code or Copilot CLI session you were in.
+A follow-up board for the ideas and loose ends that come up while you work with Claude Code or
+Copilot CLI. Mid-session you have an idea, or have to switch away from something half-done: `fu`
+parks it in seconds, files it under the job you're on, and remembers the session it came from so
+you can reopen it exactly where you were.
 
-- **Park** a task from the command line, or let your agent do it with the bundled skill.
-- **Group** tasks into *jobs* (epic, story, task, bug, spike, idea, misc). One job can span
-  several agent sessions, and one session can touch several jobs.
-- **Resume** with one key: the board runs the saved `cd <folder> && claude --resume <id>`.
-- **Keep** what you finish: done tasks stay on the board until you delete them.
+- **Follow-ups** are parked ideas and unfinished work: a one-line summary, why it came up, and
+  the session to resume. Your agent writes them for you with the bundled skill.
+- **Jobs** are the pieces of work those ideas belong to, usually a Jira epic, story, bug or
+  spike. A job gathers its follow-ups, the sessions that worked on it, and its outputs.
+- **Outputs** are the documents, skills and repos a job's sessions produce (runbooks,
+  explainers, cheatsheets, even the ones in a gitignored `.temp/`), found from what the
+  sessions wrote so they stop getting lost.
+- **Resume** a session with one key, or start a new one that gets a brief of the job: its
+  open follow-ups, earlier sessions and outputs.
+
+Why it is built this way: [docs/adr/0007](docs/adr/0007-model-work-as-follow-ups-jobs-and-outputs.md).
 
 ## Install
 
 ```sh
 brew install josh-quinn/tap/fu
-fu skill install        # optional: gives Claude Code and Copilot CLI the follow-ups skill
+fu --install-skill      # give Claude Code and Copilot CLI the follow-ups skill
 ```
 
-`fu skill install` links the skill into `~/.claude/skills` and `~/.copilot/skills`
-(use `--copy` to copy instead, `--target claude|copilot` to pick one).
+`fu --install-skill` (or `fu skill install`) links the skill into `~/.claude/skills` and
+`~/.copilot/skills`. Homebrew can't do this step itself: it only writes inside its own prefix.
+Run it once; the link follows `brew upgrade`.
 
 ## Use
 
+In a Claude Code or Copilot session, just say "idea: … park it" or "park this, I need to
+switch to X". The agent runs `fu add` with a summary and a *why* from the conversation, and
+`fu` files it under the job that session is on (`--no-job` if it's unrelated).
+
 ```sh
-fu add "Fix backprop gradient check" --why "grads disagree at layer 2" --job "Backprop" --kind epic
-fu ls                       # open tasks, least recently touched first
-fu ls --job backprop --idle 7 --search relu
-fu tree                     # jobs > sessions > tasks, and sessions > tasks
-fu resume 3                 # restart the saved session (--print just shows the command)
+fu job add "Backprop from scratch" --id ML-12 --kind epic --home ~/code/backprop
+fu add "Cache activations between passes" --why "forward pass recomputes them"
+fu ls                       # open follow-ups, least recently touched first
+fu ls --job ML-12 --idle 7 --search relu
+fu resume 3                 # reopen the session it came from (--print just shows the command)
 fu done 3                   # kept on the board; `fu ls --all` shows it
 fu                          # the interactive board
 ```
-
-In a Claude Code or Copilot session with the skill installed, just say "park this, I need to
-switch to X": the agent runs `fu add` with a summary and a *why* taken from the conversation.
 
 ### The board (`fu` with no arguments)
 
 | Key | Action |
 |---|---|
-| `1` / `2` | Board (everything, filterable) / Jobs (folder tree) |
-| `enter` | Resume the highlighted session. On a job or session in the Jobs view: open its tasks in the Board |
-| `→` / `←` | Jobs view: open or close a folder, step inside or back out |
-| `a` `e` `x` | Add, edit, delete (tasks; jobs in the Jobs view) |
-| `s` `d` `t` | Cycle status, mark done, set last worked to today |
-| `f` or `/`, `c` | Filter by text, job, status, agent, session, idle days; clear filters |
-| `.` | Show or hide done tasks |
-| `y` | Copy the restart command |
+| `1` / `2` | Jobs / Follow-ups |
+| `↑` from the first row | Onto the column headers: `enter` sorts, typing searches |
+| `enter` on a row | Column mode: `← →` pick a column, `enter` shows every row sharing that value |
+| `→` / `←` | Into the panel beside the table, and back |
+| `shift+R` | Resume a session, or start a new one for a job with a brief |
+| `shift+P` | Promote a follow-up to a job of its own |
+| `ctrl+o` | Back to where you jumped from |
+| `a` `e` `x` | Add, edit, delete |
+| `s` `d` `t` `y` | Cycle status, mark done, worked today, copy the restart command |
 | `h` | Help for every key |
 
 ## Where things live
 
 | What | Where |
 |---|---|
-| Board data | `~/development/follow-ups/board.json` (plus a generated, readable `BOARD.md`) |
-| Config | `~/.config/jq-tools/follow-ups/config.toml` (`data_dir`) |
+| Board data | `~/development/follow-ups/board.json` (plus a readable `BOARD.md`, and `briefs/` for new sessions) |
+| Config | `~/.config/jq-tools/follow-ups/config.yaml`: data folder, job types and templates, default agent settings, per-project overrides |
 
 Set `FU_DATA_DIR` to point any command at a different board.
 

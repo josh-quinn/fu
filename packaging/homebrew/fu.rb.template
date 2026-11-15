@@ -2,7 +2,7 @@
 class Fu < Formula
   include Language::Python::Virtualenv
 
-  desc "Follow-up board for parked work, with a Claude Code and Copilot CLI skill"
+  desc "Park ideas mid-session and resume Claude Code or Copilot sessions later"
   homepage "https://github.com/josh-quinn/fu"
   url "https://github.com/josh-quinn/fu/releases/download/vVERSION/fu_board-VERSION.tar.gz"
   sha256 "SHA256_OF_THE_SDIST"
@@ -10,7 +10,7 @@ class Fu < Formula
 
   depends_on "python@3.13"
 
-  # Resource blocks for Textual and its dependencies go here.
+  # Resource blocks for Textual, PyYAML and their dependencies go here.
   # Generate them with: brew update-python-resources josh-quinn/tap/fu
 
   def install
@@ -19,8 +19,10 @@ class Fu < Formula
 
   def caveats
     <<~EOS
-      To give Claude Code and Copilot CLI the follow-ups skill, run:
-        fu skill install
+      Homebrew can't write into your agents' skill folders, so give Claude Code
+      and Copilot CLI the follow-ups skill once with:
+        fu --install-skill
+      The link follows `brew upgrade`.
     EOS
   end
 

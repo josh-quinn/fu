@@ -35,6 +35,21 @@ def claude_root() -> Path:
     return Path("~/.claude/projects").expanduser()
 
 
+def session_cwd(agent: str | None, session_id: str | None) -> str | None:
+    """The folder a Claude session started in: where `claude --resume` looks for it."""
+    if agent != "claude" or not (src := claude_transcript(session_id)):
+        return None
+    with src.open(errors="replace") as f:
+        for line in f:
+            if '"cwd"' in line:
+                try:
+                    if cwd := json.loads(line).get("cwd"):
+                        return cwd
+                except ValueError:
+                    continue
+    return None
+
+
 def claude_transcript(session_id: str) -> Path | None:
     if not core.valid_session_id(session_id):
         return None

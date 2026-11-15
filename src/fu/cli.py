@@ -80,11 +80,13 @@ def public_full(item: dict, db: dict) -> dict:
 
 def cmd_add(a) -> None:
     db = load_db()
-    cwd = str(Path(a.cwd).expanduser().resolve()) if a.cwd else os.getcwd()
+    here = str(Path(a.cwd).expanduser().resolve()) if a.cwd else os.getcwd()
     agent = a.agent or detect_agent()
-    session_id = a.session_id or detect_session(agent, cwd)
+    session_id = a.session_id or detect_session(agent, here)
+    # Resuming has to start in the session's own folder, which an agent's shell may have left.
+    cwd = here if a.cwd else (artifacts.session_cwd(agent, session_id) or here)
     # Parked mid-session, a follow-up belongs to the job that session is on unless it's unrelated.
-    guessed = None if (a.job or a.no_job) else session_job(db, agent, session_id, cwd)
+    guessed = None if (a.job or a.no_job) else session_job(db, agent, session_id, here)
     item = new_item(
         db,
         " ".join(a.summary),

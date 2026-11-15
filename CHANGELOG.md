@@ -11,6 +11,13 @@ All notable changes to this project are documented here. The format follows
   as a glob or a path when it doesn't match, so an id can't reach another session's files.
 
 ### Fixed
+- `fu add` records the folder the agent session started in, not the shell's current folder, so
+  the restart command works when the agent's shell has moved (Claude Code resumes a session
+  only from its own folder).
+- An agent's own files (memory, rules, transcripts, settings under `~/.claude` and `~/.copilot`)
+  are no longer listed as outputs; skills there still are.
+- `--help` and the skill use "follow-up" consistently; the skill names `fu --install-skill`,
+  `fu sessions` and `job add --desc`.
 - A save that fails part way no longer leaves a stray `.tmp` file in the data folder.
 
 ## [0.1.0] - 2026-11-15

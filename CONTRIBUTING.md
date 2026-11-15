@@ -7,6 +7,9 @@ Security problems: report them privately as described in [SECURITY.md](SECURITY.
 - **Test first.** Add a failing test, then the code. Every bug fix gets a regression test.
 - **Small, single-purpose commits** written as [Conventional Commits](https://www.conventionalcommits.org/)
   (`feat(tui): ...`, `fix(core): ...`). A `commit-msg` hook and CI enforce this.
+- **Code style**: Python follows [PEP 8](https://peps.python.org/pep-0008/) as implemented by
+  `ruff format` (line length 120) and the `ruff check` rules in `pyproject.toml`; shell scripts
+  are POSIX `sh` and must pass `shellcheck`. `make check` and CI enforce both.
 - **Decisions** that are hard to reverse get an ADR in [`docs/adr/`](docs/adr) in the same PR.
 - **Sign off every commit** (`git commit -s`) to certify the
   [Developer Certificate of Origin](https://developercertificate.org/): you wrote the change or

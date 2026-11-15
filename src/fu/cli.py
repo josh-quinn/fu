@@ -439,7 +439,7 @@ def main() -> None:
         sp.set_defaults(fn=fn)
         return sp
 
-    sp = parser("add", cmd_add, "park a task")
+    sp = parser("add", cmd_add, "park a follow-up")
     sp.add_argument("summary", nargs="+", help="one-line topic")
     sp.add_argument("--why", help="why you started it / where you left off")
     sp.add_argument(
@@ -539,10 +539,10 @@ def main() -> None:
     sp.add_argument("ref")
     sp.add_argument("-y", "--yes", action="store_true")
 
-    sp = parser("sessions", cmd_sessions, "list agent sessions that have tasks")
+    sp = parser("sessions", cmd_sessions, "list agent sessions that have follow-ups")
     sp.add_argument("--all", action="store_true")
     sp.add_argument("--json", action="store_true")
-    sp = parser("tree", cmd_tree, "print jobs > sessions > tasks, and sessions > tasks")
+    sp = parser("tree", cmd_tree, "print jobs > sessions > follow-ups, and loose sessions > follow-ups")
     sp.add_argument("--all", action="store_true")
 
     sp = parser("skill", cmd_skill, "install the follow-ups skill for Claude Code / Copilot CLI")

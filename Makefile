@@ -14,9 +14,9 @@ format-check: ## fail if code is not ruff-formatted
 
 check: lint format-check test ## everything CI runs for code quality
 
-hooks: ## once per clone: Conventional Commits check and secret scan on push
+hooks: ## once per clone: DCO sign-off, Conventional Commits check, secret scan on push
 	git config core.hooksPath .githooks
-	@echo "hooks enabled (commit-msg, pre-push); the pre-push scan needs gitleaks: brew install gitleaks"
+	@echo "hooks enabled (prepare-commit-msg, commit-msg, pre-push); the pre-push scan needs gitleaks: brew install gitleaks"
 
 clean:
 	rm -rf dist build .pytest_cache .ruff_cache .coverage htmlcov

@@ -2,8 +2,8 @@
 # OpenSSF Privateer Baseline scanner and LFX Insights. Validate against the current schema.
 header:
   schema-version: 2.0.0
-  last-updated: '2026-11-13'
-  last-reviewed: '2026-11-13'
+  last-updated: '2026-11-15'
+  last-reviewed: '2026-11-15'
   url: https://github.com/josh-quinn/fu/blob/main/SECURITY-INSIGHTS.yml
 project:
   name: fu
@@ -12,6 +12,9 @@ project:
     - name: fu
       url: https://github.com/josh-quinn/fu
       comment: Source code
+    - name: homebrew-tap
+      url: https://github.com/josh-quinn/homebrew-tap
+      comment: Homebrew formula, generated from fu at each release
   vulnerability-reporting:
     reports-accepted: true
     bug-bounty-available: false
@@ -30,7 +33,8 @@ repository:
   security:
     assessments:
       self:
-        comment: https://github.com/josh-quinn/fu/blob/main/SECURITY.md
+        comment: Threat model and security assessment, reviewed each minor release
+        evidence: https://github.com/josh-quinn/fu/blob/main/docs/security/threat-model.md
     tools:
       - name: gitleaks
         type: secret-scanning

@@ -9,12 +9,15 @@ on:
     - cron: "33 5 * * 2"
   branch_protection_rule:
 
-permissions: read-all
+permissions:
+  contents: read
 
 jobs:
   analysis:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+      actions: read          # read workflow runs for the checks
       security-events: write # upload results to code scanning
       id-token: write        # publish results to the OpenSSF API
     steps:

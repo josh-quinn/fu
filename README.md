@@ -74,10 +74,13 @@ you wrote: do not copy in a `board.json` from someone you do not trust.
 
 ## Verify a release
 
-Every release archive has a signed build-provenance attestation and an SBOM.
+Every release archive has a signed build-provenance attestation and an SBOM. The commands
+below check both that the file is intact and that it was built by this repository's
+`release` workflow from the matching tag, the only identity that signs releases.
 
 ```sh
-gh attestation verify fu_board-X.Y.Z.tar.gz --repo josh-quinn/fu
+gh attestation verify fu_board-X.Y.Z.tar.gz --repo josh-quinn/fu \
+  --signer-workflow josh-quinn/fu/.github/workflows/release.yml
 slsa-verifier verify-artifact fu_board-X.Y.Z.tar.gz \
   --provenance-path multiple.intoto.jsonl \
   --source-uri github.com/josh-quinn/fu --source-tag vX.Y.Z
@@ -92,5 +95,12 @@ make check      # lint, format check, tests: everything CI runs for code quality
 uv run fu       # run from source
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and the decisions in
-[`docs/adr/`](docs/adr). Licensed under the [MIT License](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
+[GOVERNANCE.md](GOVERNANCE.md), the [architecture](docs/architecture.md) and the decisions in
+[`docs/adr/`](docs/adr).
+
+## Repositories
+
+- [josh-quinn/fu](https://github.com/josh-quinn/fu): the source (this repository).
+- [josh-quinn/homebrew-tap](https://github.com/josh-quinn/homebrew-tap): the Homebrew formula,
+  generated from this repository at each release. Licensed under the [MIT License](LICENSE).

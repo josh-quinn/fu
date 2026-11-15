@@ -6,7 +6,7 @@ adds SLSA provenance to the GitHub Release.
 
 ## One-time setup (owner)
 
-1. Create the public repositories `josh-quinn/fu` and `josh-quinn/homebrew-tap`.
+1. Create the public repositories `josh-quinn/fu` and `josh-quinn/homebrew-tap` (done).
 2. In `fu`: apply the branch ruleset for `main` (PR required, required checks, no force
    push), enable private vulnerability reporting, secret scanning with push protection and
    Dependabot alerts. The exact commands were reviewed before being run.
@@ -20,11 +20,17 @@ adds SLSA provenance to the GitHub Release.
 3. Wait for the `release` workflow. Check the Release has `fu_board-X.Y.Z.tar.gz`, the wheel,
    `SHA256SUMS`, the SBOM and `multiple.intoto.jsonl`.
 4. Verify it (below).
-5. Update the tap: copy `packaging/homebrew/fu.rb.template` to `Formula/fu.rb` in
-   `homebrew-tap`, replace `VERSION` and set `sha256` to the sdist's checksum from `SHA256SUMS`,
-   run `brew update-python-resources josh-quinn/tap/fu`, then `brew install --build-from-source
-   josh-quinn/tap/fu && brew test josh-quinn/tap/fu && brew audit --strict --new josh-quinn/tap/fu`,
-   and push.
+5. Update the tap. `brew update-python-resources` only works for PyPI packages, so the formula is
+   generated from the template and `uv.lock` instead:
+   ```sh
+   SHA=$(grep fu_board-X.Y.Z.tar.gz SHA256SUMS | cut -d' ' -f1)
+   python3 scripts/brew-formula.py X.Y.Z "$SHA" > ../homebrew-tap/Formula/fu.rb
+   brew install --build-from-source josh-quinn/tap/fu && brew test josh-quinn/tap/fu \
+     && brew audit --strict josh-quinn/tap/fu
+   ```
+   Then commit and push the tap. To try a formula before tagging, pass
+   `--url file:///path/to/dist/fu_board-X.Y.Z.tar.gz` and install it from a local tap
+   (`brew tap-new --no-git you/local`).
 
 ## Verifying a release
 

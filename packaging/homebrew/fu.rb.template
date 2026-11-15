@@ -8,10 +8,11 @@ class Fu < Formula
   sha256 "SHA256_OF_THE_SDIST"
   license "MIT"
 
-  depends_on "python@3.13"
+  depends_on "libyaml"
+  depends_on "python@3.14"
 
-  # Resource blocks for Textual, PyYAML and their dependencies go here.
-  # Generate them with: brew update-python-resources josh-quinn/tap/fu
+  # Resource blocks for Textual, PyYAML and their dependencies go here, generated from uv.lock:
+  #   python3 scripts/brew-formula.py
 
   def install
     virtualenv_install_with_resources

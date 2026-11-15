@@ -1,10 +1,13 @@
-# Dependabot keeps the lockfile and the pinned workflow actions current.
+# Dependabot keeps the lockfile and the pinned workflow actions current. The cooldown waits a week
+# after a release before proposing it, so a hijacked release is usually caught before it lands here.
 version: 2
 updates:
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -12,6 +15,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
